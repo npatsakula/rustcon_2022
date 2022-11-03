@@ -1,0 +1,68 @@
+use std::str::FromStr;
+
+use crate::prelude::*;
+use crate::function::Context;
+
+grammar(context: &mut Context);
+
+extern {
+    type Error = Error;
+}
+
+Args<T>: Vec<T> = {
+    "(" <mut args: (<T> ",")*> <last: T?> ")" => {
+        if let Some(last) = last {
+            args.push(last);
+        }
+        args
+    }
+}
+
+ExprOp: Operation = {
+    "+" => Operation::Plus,
+    "-" => Operation::Minus,
+}
+
+FactorOp: Operation = {
+    "*" => Operation::Product,
+    "/" => Operation::Division,
+}
+
+Float: f64 = r"-?\d+(\.\d*)?" => f64::from_str(<>).unwrap();
+Name: String = r"\p{alpha}+" => <>.into();
+
+FunctionValue: FunctionValue = {
+    Float => <>.into(),
+    Name => <>.into(),
+}
+
+Term<Value>: Expression<Value> = {
+    Value => Expression::Value(<>),
+    "(" <Expression<Value>> ")",
+}
+
+Factor<Value>: Expression<Value> = {
+    Term<Value>,
+    Factor<Value> FactorOp Term<Value> => Expression::op(<>),
+    <name:Name> <arguments:Args<Expression<Value>>> =>? {
+        let call = Expression::function_call(context, name, arguments)?;
+        Ok(call)
+    }
+}
+
+Expression<Value> = {
+    Expression<Value> ExprOp Factor<Value> => Expression::op(<>),
+    Factor<Value>,
+}
+
+Function: () = {
+    "fn" <n:Name> <args: Args<Name>> "=" <expr:Expression<FunctionValue>> ";" =>? {
+        let function = UserDefinedFunction::new(n.clone(), args, expr)?;
+        context.add_function(n, function)?;
+        Ok(())
+    }
+}
+
+pub TopLevelExpression: Expression<f64> = {
+    Function* <r:Expression<Float>> => r,
+}

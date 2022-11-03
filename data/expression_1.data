@@ -1,0 +1,5 @@
+fn double(a, b) = a * b;
+
+fn triple(a, b, c) = double(a, b) * c;
+
+triple(1, 2 + 2, sin(3 + 3))
