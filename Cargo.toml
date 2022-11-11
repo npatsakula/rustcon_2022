@@ -28,6 +28,8 @@ slab = "0.4.7"
 recursion = "0.3.3"
 cpuprofiler = "0.0.4"
 rand = "0.8.5"
+logos = "0.12.1"
+fast-float = "0.2.0"
 
 [build-dependencies]
 lalrpop = { version = "0.19", features = ["lexer"] }

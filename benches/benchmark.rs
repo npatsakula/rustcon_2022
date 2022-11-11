@@ -4,9 +4,9 @@ use std::{
     path::Path,
 };
 
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use evac::{grammar::TopLevelExpressionParser, Expression, function::Context};
-use pprof::criterion::{PProfProfiler, Output};
+use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion, black_box};
+use evac::{function::Context, grammar::TopLevelExpressionParser, lexer::EvacLexer, Expression};
+use pprof::criterion::{Output, PProfProfiler};
 use proptest::{
     strategy::{Strategy, ValueTree},
     test_runner::TestRunner,
@@ -16,7 +16,7 @@ use proptest::{
 static ALLOC: mimalloc_rust::GlobalMiMalloc = mimalloc_rust::GlobalMiMalloc;
 
 #[allow(dead_code)]
-fn gen_expression() -> impl Iterator<Item = Expression<f64>> {
+fn gen_expression() -> impl Iterator<Item = Expression<'static, f64>> {
     let mut runner = TestRunner::default();
     let mut generator = evac::properties::expression()
         .new_tree(&mut runner)
@@ -36,7 +36,7 @@ fn gen_expression() -> impl Iterator<Item = Expression<f64>> {
     })
 }
 
-fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<Expression<f64>> {
+fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<Expression<'static, f64>> {
     let file = std::fs::File::open(path).unwrap();
     let mut reader = std::io::BufReader::new(file);
     let mut buffer = Vec::new();
@@ -61,7 +61,6 @@ fn evaluate(c: &mut Criterion) {
     let dataset = read_dataset(&dataset_path);
     let dataset_stringified: Vec<_> = dataset.iter().map(|e| e.to_string()).collect();
     let parser = TopLevelExpressionParser::new();
-    let mut context = Context::default();
 
     assert_eq!(dataset.len(), BATCH_SIZE);
 
@@ -69,12 +68,14 @@ fn evaluate(c: &mut Criterion) {
         BenchmarkId::new("parse", BATCH_SIZE),
         &dataset_stringified,
         |b, input| {
-            context.clear();
             b.iter(|| {
                 input
                     .iter()
-                    .map(|q| parser.parse(&mut context, q).unwrap())
-                    .collect::<Vec<_>>()
+                    .for_each(|q| {
+                        let lexer = EvacLexer::new(q);
+                        let mut context = Context::default();
+                        black_box(parser.parse(&mut context, lexer).unwrap());
+                    });
             });
         },
     );
@@ -87,7 +88,7 @@ fn evaluate(c: &mut Criterion) {
 }
 
 criterion_group!(
-    name = evac; 
+    name = evac;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
     targets = evaluate
 );

@@ -1,6 +1,6 @@
 use std::{io::Read, path::Path, sync::Mutex};
 
-use evac::{function::Context, grammar::TopLevelExpressionParser, Expression};
+use evac::{function::Context, grammar::TopLevelExpressionParser, Expression, lexer::EvacLexer};
 use once_cell::sync::Lazy;
 
 #[global_allocator]
@@ -21,7 +21,7 @@ static DATASET_STRINGIFIED: Lazy<Mutex<Vec<String>>> = Lazy::new(|| {
         .into()
 });
 
-fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<Expression<f64>> {
+fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<Expression<'static, f64>> {
     let file = std::fs::File::open(path).unwrap();
     let mut reader = std::io::BufReader::new(file);
     let mut buffer = Vec::new();
@@ -62,7 +62,8 @@ fn parse() {
 
     for expression in dataset.iter() {
         context.clear();
-        iai::black_box(parser.parse(&mut context, expression).unwrap());
+        let lexer = EvacLexer::new(expression);
+        iai::black_box(parser.parse(&mut context, lexer).unwrap());
     }
 }
 
