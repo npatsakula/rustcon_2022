@@ -6,40 +6,40 @@ pub fn value_raw() -> impl Strategy<Value = f64> {
     any::<f64>().prop_filter("Values must be comparable.", |x| x.is_normal())
 }
 
-fn term() -> impl Strategy<Value = Expression<f64>> {
+fn term() -> impl Strategy<Value = Expression<'static, f64>> {
     value_raw().prop_map(Expression::Value)
 }
 
-fn function_call() -> impl Strategy<Value = Expression<f64>> {
-    let name = prop_oneof![Just("sin"), Just("cos")];
-    (name, term()).prop_map(|(name, arg)| Expression::FnCall {
-        arguments: vec![arg],
-        function: (if name == "sin" {
-            BuiltinFunction::Sin
-        } else {
-            BuiltinFunction::Cos
-        })
-        .into(),
-    })
-}
+// fn function_call() -> impl Strategy<Value = Expression<'static, f64>> {
+//     let name = prop_oneof![Just("sin"), Just("cos")];
+//     (name, term()).prop_map(|(name, arg)| Expression::FnCall {
+//         arguments: vec![arg],
+//         function: (if name == "sin" {
+//             BuiltinFunction::Sin
+//         } else {
+//             BuiltinFunction::Cos
+//         })
+//         .into(),
+//     })
+// }
 
-fn factor() -> impl Strategy<Value = Expression<f64>> {
+fn factor() -> impl Strategy<Value = Expression<'static, f64>> {
     term()
-        .prop_recursive(128, 1024, 100, |inner| {
+        .prop_recursive(4, 64, 16, |inner| {
             (inner, prop_oneof![Just(Product), Just(Division)], term())
                 .prop_map(|(left, op, right)| Expression::op(left, op, right))
         })
 }
 
-pub fn expression() -> impl Strategy<Value = Expression<f64>> {
+pub fn expression() -> impl Strategy<Value = Expression<'static, f64>> {
     factor()
-        .prop_recursive(128, 1024, 100, |inner| {
+        .prop_recursive(4, 64, 16, |inner| {
             (inner, prop_oneof![Just(Plus), Just(Minus)], factor())
                 .prop_map(|(expr, op, factor)| Expression::op(expr, op, factor))
         })
 }
 
-pub fn generate_tree(nodes: usize) -> Expression<f64> {
+pub fn generate_tree(nodes: usize) -> Expression<'static, f64> {
     let config = proptest::test_runner::Config {
         max_local_rejects: u32::MAX,
         ..Default::default()

@@ -28,6 +28,10 @@ slab = "0.4.7"
 recursion = "0.3.3"
 cpuprofiler = "0.0.4"
 rand = "0.8.5"
+logos = "0.12.1"
+fast-float = "0.2.0"
+lz4_flex = "0.9"
+bincode = "1.3"
 
 [build-dependencies]
 lalrpop = { version = "0.19", features = ["lexer"] }
@@ -38,15 +42,12 @@ mimalloc-rust = "0.2"
 once_cell = "1.16"
 test-case = "2.2"
 criterion = "0.4"
-lz4_flex = "0.9"
-bincode = "1.3"
 iai = "0.1"
 
 [profile.release]
-debug = true
+lto = "fat"
+strip = "debuginfo"
 
-[profile.bench]
-debug = 2
 
 [[bench]]
 name = "benchmark"
@@ -54,8 +55,4 @@ harness = false
 
 [[bench]]
 name = "cache_misses"
-harness = false
-
-[[bench]]
-name = "cache_performance"
 harness = false

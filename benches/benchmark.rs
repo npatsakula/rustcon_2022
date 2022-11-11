@@ -1,95 +1,78 @@
-use std::{
-    cmp::Ordering,
-    io::{Read, Write},
-    path::Path,
+use std::path::Path;
+
+use criterion::{black_box, criterion_group, criterion_main, BenchmarkId, Criterion, profiler::Profiler};
+use evac::{
+    block::TopBlockExpression,
+    function::Context,
+    grammar::TopLevelExpressionParser,
+    lexer::EvacLexer,
+    utils::{read_dataset, DEFAULT_DATASET},
+    Expression,
 };
-
-use criterion::{criterion_group, criterion_main, BenchmarkId, Criterion};
-use evac::{grammar::TopLevelExpressionParser, Expression, function::Context};
-use pprof::criterion::{PProfProfiler, Output};
-use proptest::{
-    strategy::{Strategy, ValueTree},
-    test_runner::TestRunner,
-};
-
-#[global_allocator]
-static ALLOC: mimalloc_rust::GlobalMiMalloc = mimalloc_rust::GlobalMiMalloc;
-
-#[allow(dead_code)]
-fn gen_expression() -> impl Iterator<Item = Expression<f64>> {
-    let mut runner = TestRunner::default();
-    let mut generator = evac::properties::expression()
-        .new_tree(&mut runner)
-        .unwrap();
-
-    std::iter::from_fn(move || {
-        let expr: Expression<_> = generator.current();
-        let leafs_count = expr.leafs_count();
-
-        match leafs_count.cmp(&30) {
-            Ordering::Less => generator.simplify(),
-            Ordering::Greater => generator.complicate(),
-            Ordering::Equal => true,
-        };
-
-        Some(expr)
-    })
-}
-
-fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<Expression<f64>> {
-    let file = std::fs::File::open(path).unwrap();
-    let mut reader = std::io::BufReader::new(file);
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer).unwrap();
-    let buffer = lz4_flex::decompress_size_prepended(&buffer).unwrap();
-    bincode::deserialize(&buffer).unwrap()
-}
-
-#[allow(dead_code)]
-fn write_dataset<P: AsRef<Path>>(path: P, dataset: Vec<Expression<f64>>) {
-    let file = std::fs::File::create(path).unwrap();
-    let mut file = std::io::BufWriter::new(file);
-    let dataset = bincode::serialize(&dataset).unwrap();
-    let dataset = lz4_flex::compress_prepend_size(&dataset);
-    file.write_all(&dataset).unwrap();
-}
+use pprof::criterion::{Output, PProfProfiler};
 
 fn evaluate(c: &mut Criterion) {
-    const BATCH_SIZE: usize = 500_000;
-    let dataset_path = format!("./data/expressions_{BATCH_SIZE}.bin.lz4");
+    let dataset = read_dataset(DEFAULT_DATASET);
+    let dataset_size = dataset.len();
 
-    let dataset = read_dataset(&dataset_path);
     let dataset_stringified: Vec<_> = dataset.iter().map(|e| e.to_string()).collect();
     let parser = TopLevelExpressionParser::new();
-    let mut context = Context::default();
-
-    assert_eq!(dataset.len(), BATCH_SIZE);
 
     c.bench_with_input(
-        BenchmarkId::new("parse", BATCH_SIZE),
+        BenchmarkId::new("parse", dataset_size),
         &dataset_stringified,
         |b, input| {
-            context.clear();
             b.iter(|| {
-                input
-                    .iter()
-                    .map(|q| parser.parse(&mut context, q).unwrap())
-                    .collect::<Vec<_>>()
+                input.iter().for_each(|q| {
+                    let lexer = EvacLexer::new(q);
+                    let mut context = Context::default();
+                    black_box(parser.parse(&mut context, lexer).unwrap());
+                });
             });
         },
     );
 
     c.bench_with_input(
-        BenchmarkId::new("interpretation", BATCH_SIZE),
+        BenchmarkId::new("not cache local", dataset_size),
         &dataset,
         |b, input| b.iter(|| input.iter().map(Expression::evaluate).sum::<f64>()),
+    );
+
+    let dataset = dataset
+        .into_iter()
+        .map(TopBlockExpression::new)
+        .collect::<Vec<_>>();
+
+    c.bench_with_input(
+        BenchmarkId::new("cache local", dataset_size),
+        &dataset,
+        |b, input| b.iter(|| input.iter().map(TopBlockExpression::evaluate).sum::<f64>()),
     );
 }
 
 criterion_group!(
-    name = evac; 
+    name = evac;
     config = Criterion::default().with_profiler(PProfProfiler::new(100, Output::Flamegraph(None)));
+    // config = Criterion::default().with_profiler(GProfiler);
     targets = evaluate
 );
 
 criterion_main!(evac);
+
+struct GProfiler;
+
+impl Profiler for GProfiler {
+    fn start_profiling(&mut self, _benchmark_id: &str, benchmark_dir: &Path) {
+        std::fs::create_dir_all(benchmark_dir).unwrap();
+        let path = benchmark_dir
+            .join("gperftools.profile")
+            .display()
+            .to_string();
+        dbg!(&path);
+        cpuprofiler::PROFILER.lock().unwrap().start(path).unwrap();
+    }
+
+    fn stop_profiling(&mut self, _benchmark_id: &str, _benchmark_dir: &Path) {
+        cpuprofiler::PROFILER.lock().unwrap().stop().unwrap();
+    }
+}

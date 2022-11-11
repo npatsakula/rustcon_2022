@@ -1,5 +1,5 @@
 pub mod user_defined;
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 pub use user_defined::{FunctionValue, UserDefinedFunction};
 
 pub mod builtin;
@@ -13,12 +13,12 @@ use std::sync::Arc;
 use snafu::OptionExt;
 
 #[derive(Debug)]
-pub struct Context {
+pub struct Context<'input> {
     builtin_functions: HashMap<&'static str, BuiltinFunction>,
-    user_defined_functions: HashMap<String, Arc<UserDefinedFunction>>,
+    user_defined_functions: HashMap<&'input str, Arc<UserDefinedFunction<'input>>>,
 }
 
-impl Default for Context {
+impl Default for Context<'static> {
     fn default() -> Self {
         Self {
             builtin_functions: BuiltinFunction::build_map(),
@@ -27,16 +27,15 @@ impl Default for Context {
     }
 }
 
-impl Context {
-    fn function_names(&self) -> Vec<String> {
+impl<'input> Context<'input> {
+    fn function_names(&self) -> impl Iterator<Item = &'input str> + '_ {
         self.builtin_functions
             .keys()
-            .map(|s| s.to_string())
-            .chain(self.user_defined_functions.keys().cloned())
-            .collect()
+            .copied()
+            .chain(self.user_defined_functions.keys().copied())
     }
 
-    pub fn get_function(&self, name: &str) -> Result<Function, Error> {
+    pub fn get_function(&self, name: &'input str) -> Result<Function<'input>, Error> {
         self.builtin_functions
             .get(name)
             .map(|f| Function::from(*f))
@@ -48,16 +47,19 @@ impl Context {
             })
             .with_context(|| UndefinedFunctionSnafu {
                 name,
-                options: self.function_names(),
+                options: self
+                    .function_names()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
             })
     }
 
     pub fn add_function(
         &mut self,
-        name: String,
-        function: UserDefinedFunction,
+        name: &'input str,
+        function: UserDefinedFunction<'input>,
     ) -> Result<(), Error> {
-        if self.user_defined_functions.contains_key(&name) {
+        if self.user_defined_functions.contains_key(name) {
             return FunctionAlreadyExistSnafu { name }.fail();
         }
 
@@ -71,17 +73,17 @@ impl Context {
 }
 
 #[derive(Debug, Clone, PartialEq, derive_more::From, Serialize, Deserialize)]
-pub enum Function {
+pub enum Function<'input> {
     Builtin(BuiltinFunction),
     #[serde(skip)]
-    UserDefined(Arc<UserDefinedFunction>),
+    UserDefined(Arc<UserDefinedFunction<'input>>),
 }
 
-impl Function {
+impl<'input> Function<'input> {
     pub fn name(&self) -> &str {
         match self {
             Function::Builtin(b) => b.name(),
-            Function::UserDefined(u) => &u.name,
+            Function::UserDefined(u) => u.name,
         }
     }
 

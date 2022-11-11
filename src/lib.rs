@@ -9,7 +9,12 @@ pub mod error;
 use error::*;
 use serde::{Deserialize, Serialize};
 
+pub mod block;
+
 pub mod properties;
+pub mod utils;
+
+pub mod lexer;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, derive_more::Display, Serialize, Deserialize)]
 pub enum Operation {
@@ -36,7 +41,7 @@ impl Operation {
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Expression<V> {
+pub enum Expression<'input, V> {
     Value(V),
 
     Op {
@@ -46,12 +51,12 @@ pub enum Expression<V> {
     },
 
     FnCall {
-        function: Function,
+        function: Function<'input>,
         arguments: Vec<Self>,
     },
 }
 
-impl<V: Display> Display for Expression<V> {
+impl<'input, V: Display> Display for Expression<'input, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expression::Value(v) => v.fmt(f),
@@ -77,7 +82,7 @@ impl<V: Display> Display for Expression<V> {
     }
 }
 
-impl<V> Expression<V> {
+impl<'input, V> Expression<'input, V> {
     pub fn op(lhs: Self, op: Operation, rhs: Self) -> Self {
         Self::Op {
             left: lhs.into(),
@@ -87,11 +92,11 @@ impl<V> Expression<V> {
     }
 
     pub fn function_call(
-        context: &Context,
-        name: String,
+        context: &Context<'input>,
+        name: &'input str,
         arguments: Vec<Self>,
     ) -> Result<Self, Error> {
-        let function = context.get_function(&name)?;
+        let function = context.get_function(name)?;
 
         let expected = function.arguments_count();
         let parsed = arguments.len();
@@ -119,7 +124,7 @@ impl<V> Expression<V> {
     }
 }
 
-impl Expression<f64> {
+impl Expression<'_, f64> {
     pub fn evaluate(&self) -> f64 {
         match self {
             Self::Value(v) => *v,
@@ -153,6 +158,7 @@ lalrpop_mod!(
 pub mod parse_test {
     use super::Context;
     use crate::grammar::TopLevelExpressionParser;
+    use crate::lexer::EvacLexer;
     use crate::properties::expression;
 
     use proptest::prelude::*;
@@ -163,7 +169,8 @@ pub mod parse_test {
         fn parse(expr in expression().prop_filter("Result must be comparable.", |e| e.evaluate().is_normal())) {
             let evaluate_source = expr.evaluate();
             let stringified = format!("{expr}");
-            let parsed = TopLevelExpressionParser::new().parse(&mut Context::default(), &stringified).unwrap();
+            let lexer = EvacLexer::new(&stringified);
+            let parsed = TopLevelExpressionParser::new().parse(&mut Context::default(), lexer).unwrap();
             let evaluate_parsed = parsed.evaluate();
             prop_assert_eq!(evaluate_source, evaluate_parsed);
         }
@@ -171,8 +178,9 @@ pub mod parse_test {
 
     #[test_case(include_str!("../data/expression_1.data") => matches Ok(_); "expression 1")]
     fn test_data_parse(source: &'static str) -> Result<f64, String> {
+        let lexer = EvacLexer::new(source);
         TopLevelExpressionParser::new()
-            .parse(&mut Context::default(), source)
+            .parse(&mut Context::default(), lexer)
             .map_err(|e| e.to_string())
             .map(|e| e.evaluate())
     }

@@ -1,69 +1,104 @@
-use std::{io::Read, path::Path, sync::Mutex};
+use evac::{block::Layer, Expression, Operation};
+use iai::black_box;
 
-use evac::{function::Context, grammar::TopLevelExpressionParser, Expression};
-use once_cell::sync::Lazy;
-
-#[global_allocator]
-static ALLOC: mimalloc_rust::GlobalMiMalloc = mimalloc_rust::GlobalMiMalloc;
-
-const DATASET_PATH: &str = "./data/expressions_30kk.bin.lz4";
-
-static DATASET: Lazy<Mutex<Vec<Expression<f64>>>> = Lazy::new(|| {
-    read_dataset(DATASET_PATH).into()
-});
-
-static DATASET_STRINGIFIED: Lazy<Mutex<Vec<String>>> = Lazy::new(|| {
-    let dataset = read_dataset(DATASET_PATH);
-    dataset
-        .iter()
-        .map(|e| e.to_string())
-        .collect::<Vec<_>>()
-        .into()
-});
-
-fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<Expression<f64>> {
-    let file = std::fs::File::open(path).unwrap();
-    let mut reader = std::io::BufReader::new(file);
-    let mut buffer = Vec::new();
-    reader.read_to_end(&mut buffer).unwrap();
-    let buffer = lz4_flex::decompress_size_prepended(&buffer).unwrap();
-    bincode::deserialize(&buffer).unwrap()
+#[repr(C)]
+struct BoxedSum {
+    left: Box<i32>,
+    right: Box<i32>,
 }
 
-// enum CacheFriendly<'a> {
-//     Value(f64),
-//     Product {
-//         left: BBox<'a, Self>,
-//         right: BBox<'a, Self>,
-//     }
-// }
+impl BoxedSum {
+    fn new(left: i32, right: i32) -> Self {
+        Self {
+            left: left.into(),
+            right: right.into(),
+        }
+    }
 
-// enum NonSoCacheFriendly {
-//     Value(f64),
-//     Product {
-//         left: Box<Self>,
-//         right: Box<Self>,
-//     }
-// }
-
-
-fn evaluate() {
-    let dataset = DATASET.lock().unwrap();
-    for expression in dataset.iter() {
-        iai::black_box(expression.evaluate());
+    fn evaluate(&self) -> i32 {
+        *self.left + *self.right
     }
 }
 
-fn parse() {
-    let dataset = DATASET_STRINGIFIED.lock().unwrap();
+#[repr(C)]
+struct LocalSum {
+    offset_1: usize,
+    left: i32,
+    offset_2: usize,
+    right: i32,
+}
 
-    let parser = TopLevelExpressionParser::new();
-    let mut context = Context::default();
+impl LocalSum {
+    fn new(left: i32, right: i32) -> Self {
+        Self {
+            offset_1: 2,
+            left,
+            offset_2: 4,
+            right,
+        }
+    }
 
-    for expression in dataset.iter() {
-        context.clear();
-        iai::black_box(parser.parse(&mut context, expression).unwrap());
+    fn evaluate(&self) -> i32 {
+        self.left + self.right
     }
 }
 
-iai::main!(evaluate, parse);
+fn not_cache_local() {
+    let sum = BoxedSum::new(black_box(3), black_box(4));
+    black_box(sum.evaluate());
+    black_box(sum);
+}
+
+fn cache_local() {
+    let sum = LocalSum::new(black_box(3), black_box(4));
+    black_box(sum.evaluate());
+    black_box(sum);
+}
+
+fn real_expression() {
+    black_box(
+        Expression::op(
+            black_box(Expression::Value(3.0)),
+            black_box(Operation::Plus),
+            black_box(Expression::Value(4.0)),
+        )
+        .evaluate(),
+    );
+}
+
+fn real_block() {
+    let data = vec![
+        Layer::<'static, f64, ()>::Value(0.0), // Offset.
+        black_box(Layer::Value(3.0)),
+        Layer::Value(0.0), // Offset.
+        black_box(Layer::Value(4.0)),
+    ];
+    let layer: Layer<'static, (), usize> = Layer::Op {
+        left: black_box(1),
+        op: Operation::Plus,
+        right: black_box(3),
+    };
+
+    if let Layer::Op {
+        left,
+        op: Operation::Plus,
+        right,
+    } = layer
+    {
+        let left = if let Layer::Value(value) = unsafe { data.get_unchecked(left) } {
+            value
+        } else {
+            return;
+        };
+
+        let right = if let Layer::Value(value) = unsafe { data.get_unchecked(right) } {
+            value
+        } else {
+            return;
+        };
+
+        black_box(left + right);
+    }
+}
+
+iai::main!(not_cache_local, cache_local, real_expression, real_block);
