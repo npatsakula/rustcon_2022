@@ -1,14 +1,15 @@
-use std::{collections::HashSet, fmt::Debug, sync::Arc};
-
-use crate::{function::Function, prelude::*};
+use crate::{function::Function, names::NAMES, prelude::*};
 use proptest::{prelude::*, sample::select};
+use std::{collections::HashSet, fmt::Debug, sync::Arc};
 use Operation::*;
 
 pub fn value() -> impl Strategy<Value = f64> + Clone {
     any::<f64>().prop_filter("Values must be comparable.", |x| x.is_normal())
 }
 
-pub fn function_value(variables: Vec<String>) -> impl Strategy<Value = FunctionValue> + Clone {
+pub fn function_value(
+    variables: Vec<&'static str>,
+) -> impl Strategy<Value = FunctionValue<'static>> + Clone {
     prop_oneof![
         // Число должно генерироваться в пять раз чаще, чем переменная.
         5 => value().prop_map(FunctionValue::Float),
@@ -18,7 +19,7 @@ pub fn function_value(variables: Vec<String>) -> impl Strategy<Value = FunctionV
 
 fn term<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     value_strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction>>,
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
 ) -> impl Strategy<Value = Expression<V>> {
     prop_oneof![
         // Числово должно генерироваться в десять раз чаще, чем вызов функции.
@@ -28,24 +29,25 @@ fn term<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
 }
 
 fn user_defined_function(
-    functions: Vec<Arc<UserDefinedFunction>>,
-) -> impl Strategy<Value = UserDefinedFunction> {
+    functions: Vec<Arc<UserDefinedFunction<'static>>>,
+) -> impl Strategy<Value = UserDefinedFunction<'static>> {
     (
         // Имя функции имеет длину от восьми до шестнадцати символов и состоит из
         // символов класса `alpha`.
-        r"\p{alpha}{8,16}",
+        select(NAMES.to_vec()),
+        // r"\p{alpha}{8,16}",
         // Функция имеет от двух до пяти аргументов. Каждый аргумент имеет имя
         // состоящие из имволов класса `alpha` и содержащие от трёх до семи
         // символов.
         //
         // Так как имена аргументов не должны совпадать, генерировать мы будем `HashSet`.
-        proptest::collection::hash_set(r"\p{alpha}{3,7}", 2..5),
+        proptest::collection::hash_set(select(NAMES.to_vec()), 2..5),
     )
         .prop_flat_map(move |(name, args)| {
             let args = args.into_iter().collect::<Vec<_>>();
             expression(function_value(args.clone()), functions.clone()).prop_map(
                 move |expression| UserDefinedFunction {
-                    name: name.clone(),
+                    name,
                     args: args.clone(),
                     expression,
                 },
@@ -55,7 +57,7 @@ fn user_defined_function(
 
 fn function_call<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     value_strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction>>,
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
 ) -> impl Strategy<Value = Expression<V>> {
     // Если пользовательских функций нет, то создаём только встроенные.
     // Если на пустом векторе позвать `select`, получим ошибку генерации данных.
@@ -89,8 +91,8 @@ fn function_call<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 's
 
 fn factor<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction>>,
-) -> impl Strategy<Value = Expression<V>> {
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
+) -> impl Strategy<Value = Expression<'static, V>> {
     // Так как `factor` определяется рекурсивно, мы хотим ограничить глубину рекурсии, чтобы не
     // пробить стэк при генерации данных. Для этого `proptest` предоставляет метод `prop_recursive`,
     // где первым аргументом идёт максимальная глубина рекурсии, вторым желаемое количество элементов,
@@ -109,8 +111,8 @@ fn factor<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
 
 fn expression<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     value_strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction>>,
-) -> impl Strategy<Value = Expression<V>> {
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
+) -> impl Strategy<Value = Expression<'static, V>> + '_ {
     factor(value_strategy.clone(), user_defined_functions.clone())
         .prop_recursive(4, 16, 4, move |inner| {
             (
@@ -125,7 +127,7 @@ fn expression<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'stat
 
 // Набор функций, которые будут использоваться в выражении, будет определён рекурсивно.
 // Делается это потому, что одни функции могу ссылаться на другие (определённые ранее).
-fn functions() -> impl Strategy<Value = Vec<Arc<UserDefinedFunction>>> {
+fn functions() -> impl Strategy<Value = Vec<Arc<UserDefinedFunction<'static>>>> {
     // В качестве вырожденного случая будет использоваться функция, которая не ссылается ни
     // на какие другие функции.
     user_defined_function(Vec::new())
@@ -142,12 +144,12 @@ fn functions() -> impl Strategy<Value = Vec<Arc<UserDefinedFunction>>> {
         })
         // Имена функций обязаны быть уникальными, здесь мы делаем соответствующую проверку:
         .prop_filter("functions must be unique", |functions| {
-            let names: HashSet<&str> = functions.iter().map(|f| f.name.as_str()).collect();
+            let names: HashSet<&str> = functions.iter().map(|f| f.name).collect();
             names.len() == functions.len()
         })
 }
 
-pub fn top_level_expression() -> impl Strategy<Value = Expression<f64>> {
+pub fn top_level_expression() -> impl Strategy<Value = Expression<'static, f64>> {
     // Сначала мы генерируем функции, которые планируем использовать, после чего генерируем
     // выражение:
     functions().prop_flat_map(|user_defined_functions| expression(value(), user_defined_functions))

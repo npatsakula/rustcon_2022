@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::ExitCode};
 
 use clap::Parser;
-use evac::grammar::TopLevelExpressionParser;
+use evac::{function::Context, grammar::TopLevelExpressionParser, lexer::EvacLexer};
 
 #[derive(Debug, Parser)]
 struct Opt {
@@ -23,7 +23,9 @@ fn main() -> ExitCode {
         std::io::read_to_string(std::io::stdin()).expect("Failed to read from STDIN.")
     };
 
-    let expression = match TopLevelExpressionParser::new().parse(&mut Default::default(), &source) {
+    let lexer = EvacLexer::new(&source);
+    let mut context = Context::default();
+    let expression = match TopLevelExpressionParser::new().parse(&mut context, lexer) {
         Err(e) => {
             eprintln!("{e}");
             return ExitCode::FAILURE;

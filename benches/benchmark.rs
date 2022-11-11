@@ -6,14 +6,16 @@ use criterion::{
 use evac::{
     function::Context,
     grammar::TopLevelExpressionParser,
-    utils::{read_dataset, DEFAULT_DATASET},
+    lexer::EvacLexer,
+    utils::{deserialize_dataset, read_dataset, DEFAULT_DATASET},
     Expression,
 };
 use pprof::criterion::{Output, PProfProfiler};
 
 fn benchmark(c: &mut Criterion) {
     // Десериализуем датасет, который сгенерировали ранее.
-    let dataset = read_dataset(DEFAULT_DATASET);
+    let raw = read_dataset(DEFAULT_DATASET);
+    let dataset = deserialize_dataset(&raw);
     let dataset_size = dataset.len();
 
     let dataset_stringified: Vec<_> = dataset
@@ -41,7 +43,11 @@ fn benchmark(c: &mut Criterion) {
                 input.iter().for_each(|q| {
                     // Используем `black_box`, чтобы гарантировать, что компилятор не
                     // удалит результаты этого вычисления в ходе оптимизации.
-                    black_box(parser.parse(&mut Context::default(), q).unwrap());
+                    black_box(
+                        parser
+                            .parse(&mut Context::default(), EvacLexer::new(q))
+                            .unwrap(),
+                    );
                 });
             });
         },

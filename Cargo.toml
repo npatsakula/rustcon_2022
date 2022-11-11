@@ -21,9 +21,15 @@ rand = "0.8"
 
 proptest = "1.0"
 proptest-derive = "0.3"
+logos = "0.12.1"
+fast-float = "0.2.0"
 
 [build-dependencies]
 lalrpop = { version = "0.19", features = ["lexer"] }
+regex_generate = "=0.2.1"
+quote = "1.0"
+rand = "0.7"
+rand_core = "0.6"
 
 [dev-dependencies]
 pprof = { version = "0.11", features = ["criterion", "flamegraph"] }

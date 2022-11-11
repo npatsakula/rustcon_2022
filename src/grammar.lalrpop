@@ -1,12 +1,29 @@
-use std::str::FromStr;
 use crate::prelude::*;
+use crate::lexer::Token;
 
-grammar(context: &mut Context);
+grammar<'input>(context: &mut Context<'input>);
 
 extern {
     // LALRPOP поддерживает пользовательские ошибки
     // указать её тип можно следующим образом:
     type Error = Error;
+
+    type Location = usize;
+
+    enum Token<'input> {
+        "float" => Token::Float(<f64>),
+        "+"     => Token::Sum,
+        "-"     => Token::Sub,
+        "*"     => Token::Mul,
+        "/"     => Token::Div,
+        "("     => Token::OpenBracket,
+        ")"     => Token::CloseBracket,
+        ","     => Token::Comma,
+        "fn"    => Token::Fn,
+        "="     => Token::Eq,
+        ";"     => Token::Semicolon,
+        "name"  => Token::Name(<&'input str>),
+    }
 }
 
 // Здесь мы определяем парсер, который разбирает список
@@ -40,15 +57,15 @@ FactorOp: Operation = {
     "/" => Operation::Div,
 }
 
-Float: f64 = r"-?\d+(\.\d*)?" => f64::from_str(<>).unwrap();
-Name: String = r"\p{alpha}+" => <>.into();
+Float: f64 = "float" => <>;
+Name = "name";
 
-FunctionValue: FunctionValue = {
+FunctionValue: FunctionValue<'input> = {
     Float => <>.into(),
     Name => <>.into(),
 }
 
-Term<Value>: Expression<Value> = {
+Term<Value>: Expression<'input, Value> = {
     Value => Expression::Value(<>),
     // Скобки подымают приоритет операции,
     // потому выражение в скобках имеет такой же
@@ -70,7 +87,7 @@ Term<Value>: Expression<Value> = {
     }
 }
 
-Tier<Value, Operation, Right>: Expression<Value> = {
+Tier<Value, Operation, Right>: Expression<'input, Value> = {
     Tier<Value, Operation, Right> Operation Right => Expression::op(<>),
     Right,
 }
@@ -91,14 +108,14 @@ Function: () = {
     // переменной или вызов неопределённой функции). По этой причине также
     // используется `=>?`.
     "fn" <n:Name> <args: Args<Name>> "=" <expr:Expression<FunctionValue>> ";" =>? {
-        let function = UserDefinedFunction::new(n.clone(), args, expr)?;
+        let function = UserDefinedFunction::new(n, args, expr)?;
         context.add_function(n, function)?;
         Ok(())
     }
 }
 
-pub TopLevelExpression: Expression<f64> = {
+pub TopLevelExpression: Expression<'input, f64> = {
     // Пользовательский ввод может иметь ноль и более определённых функций
     // и выражение, в которых они используются:
-    Function* <r:Expression<Float>> => r,
+    Function* <Expression<Float>> => <>,
 }

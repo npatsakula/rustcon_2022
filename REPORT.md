@@ -2,6 +2,7 @@
 - [Pirouette: parsing](#pirouette-parsing)
 - [Macho: benchmarks](#macho-benchmarks)
 - [Pantano: cache locality](#pantano-cache-locality)
+- [Corrida: stage one](#corrida-stage-one)
 
 ## Prelude
 
@@ -962,3 +963,205 @@ pub enum Expression<V> {
    крейта `recursion`. В силу того, что я не могу опубликовать свою реализацию этой идеи,
    я не могу давать комментарии касательно эргономики предоставляемого интерфейса, предлагая
    читателю сделать выводы самостоятельно.
+
+## Corrida: stage one
+
+В первом подходе к снаряду попытаемся улучшить скорость парсинга, для этого сначала нужно переехать
+оптимизирующий лексер-генератор и невладеющие имена. В качестве такого будет взят `logos`, тогда
+токен будет определён следующим образом:
+
+```rust
+#[derive(Debug, Clone, Copy, PartialEq, logos::Logos, derive_more::Display)]
+pub enum Token<'input> {
+    #[regex(r"-?\d+(\.\d*)?", float_parser)]
+    Float(f64),
+
+    #[regex(r"\p{alpha}+")]
+    Name(&'input str),
+
+    #[display(fmt = "fn")]
+    #[token("fn")]
+    Fn,
+
+    #[token("+")]
+    #[display(fmt = "+")]
+    Sum,
+
+    #[token("-")]
+    #[display(fmt = "-")]
+    Sub,
+
+    #[token("*")]
+    #[display(fmt = "*")]
+    Mul,
+
+    #[token("/")]
+    #[display(fmt = "/")]
+    Div,
+
+    #[token("(")]
+    #[display(fmt = "(")]
+    OpenBracket,
+
+    #[token(")")]
+    #[display(fmt = ")")]
+    CloseBracket,
+
+    #[token(",")]
+    #[display(fmt = ",")]
+    Comma,
+
+    #[token("=")]
+    #[display(fmt = "=")]
+    Eq,
+
+    #[token(";")]
+    #[display(fmt = ";")]
+    Semicolon,
+
+    #[error]
+    #[regex(r"[ \t\n\f]+", logos::skip)]
+    #[display(fmt = "")]
+    Error,
+}
+```
+
+Здесь же мы можем определить более производительный парсер чисел с плавающей точкой:
+
+```rust
+#[inline(always)]
+fn float_parser<'input>(lex: &mut Lexer<'input, Token<'input>>) -> f64 {
+    fast_float::parse::<f64, &str>(lex.slice()).unwrap()
+}
+```
+
+Остаётся только подключить всё это великолепие к LALRPOP (весь код
+выражений останется почти таким же):
+
+```rust
+extern {
+    // LALRPOP поддерживает пользовательские ошибки
+    // указать её тип можно следующим образом:
+    type Error = Error;
+
+    type Location = usize;
+
+    enum Token<'input> {
+        "float" => Token::Float(<f64>),
+        "+"     => Token::Sum,
+        "-"     => Token::Sub,
+        "*"     => Token::Mul,
+        "/"     => Token::Div,
+        "("     => Token::OpenBracket,
+        ")"     => Token::CloseBracket,
+        ","     => Token::Comma,
+        "fn"    => Token::Fn,
+        "="     => Token::Eq,
+        ";"     => Token::Semicolon,
+        "name"  => Token::Name(<&'input str>),
+    }
+}
+```
+
+С невладеющими строками всё несколько сложнее, т.к. они ломают наш код сразу в
+нескольких местах:
+1. Теперь мы не можем просто так генерировать имена при помощи `proptest`,
+   т.к. имена не смогут жить достаточно долго.
+2. Мы не можем в одну функцию десериализовывать наш тестовый набор, т.к. имена
+   должны на что-то ссылаться.
+
+Первую проблему можно решить на этапе компиляции, сгенерив достаточно имён при
+помощи `regex_generate` и упаковав в Rust-структуру при помощи `quote`:
+
+```rust
+fn generate_names(count: usize) {
+    // Требуется, чтобы записать код в файл.
+    use std::io::Write;
+
+    let mut generator = regex_generate::Generator::new(
+        // Имя состоит из символов класса `alpha`, длина от двух до двенадцати символов.
+        r"\p{alpha}{2,12}",
+        rand::thread_rng(),
+        regex_generate::DEFAULT_MAX_REPEAT,
+    )
+    .unwrap();
+
+    // Мы не хотим, чтобы имена повторялись, потому используем HashSet:
+    let mut names = std::collections::HashSet::with_capacity(count);
+    while names.len() < count {
+        let mut buffer = vec![];
+        generator.generate(&mut buffer).unwrap();
+        let name = String::from_utf8(buffer).unwrap();
+        names.insert(name);
+    }
+
+    let names: Vec<_> = names.into_iter().collect();
+    // Описываем структуру, которую хотим генерировать:
+    let names = quote::quote! {
+        pub(crate) const NAMES: [&str; #count] = [
+            #(#names),*
+        ];
+    };
+
+    let names = names.to_string();
+    // Записываем её в файл:
+    std::fs::File::create("./src/names.rs")
+        .unwrap()
+        .write_all(names.as_bytes())
+        .unwrap();
+}
+```
+
+Для исправление проблемы с десериализацией нам сначала потребуется поправить аттрибуты `serde`:
+
+```rust
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub enum Expression<'input, V> {
+    Value(V),
+
+    Op {
+        left: Box<Self>,
+        op: Operation,
+        right: Box<Self>,
+    },
+
+    FnCall {
+        #[serde(borrow)]
+        function: Function<'input>,
+        arguments: Vec<Self>,
+    },
+}
+
+#[derive(Debug, Clone, PartialEq, derive_more::From, Serialize, Deserialize)]
+pub enum Function<'input> {
+    Builtin(BuiltinFunction),
+
+    #[serde(borrow)]
+    #[serde(serialize_with = "serialize_user_defined")]
+    #[serde(deserialize_with = "deserialize_user_defined")]
+    UserDefined(Arc<UserDefinedFunction<'input>>),
+}
+```
+
+А потом разбить функцию десериализации на две части:
+
+```rust
+pub fn read_dataset<P: AsRef<Path>>(path: P) -> Vec<u8> {
+    let file = std::fs::File::open(path).unwrap();
+    let mut reader = std::io::BufReader::new(file);
+    let mut buffer = Vec::new();
+    reader.read_to_end(&mut buffer).unwrap();
+    lz4_flex::decompress_size_prepended(&buffer).unwrap()
+}
+
+pub fn deserialize_dataset(raw: &[u8]) -> Vec<Expression<f64>> {
+    bincode::deserialize(raw).unwrap()
+}
+```
+
+В результате всех наших улучшений получаем следующий результат:
+
+```text
+parse/3000              time:   [980.54 ms 981.29 ms 982.14 ms]
+                        change: [-66.930% -66.863% -66.803%] (p = 0.00 < 0.05)
+```

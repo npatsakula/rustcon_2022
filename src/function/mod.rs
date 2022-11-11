@@ -14,12 +14,12 @@ use std::sync::Arc;
 use snafu::OptionExt;
 
 #[derive(Debug, Clone)]
-pub struct Context {
+pub struct Context<'input> {
     builtin_functions: HashMap<&'static str, BuiltinFunction>,
-    user_defined_functions: HashMap<String, Arc<UserDefinedFunction>>,
+    user_defined_functions: HashMap<&'input str, Arc<UserDefinedFunction<'input>>>,
 }
 
-impl Default for Context {
+impl<'i> Default for Context<'i> {
     fn default() -> Self {
         Self {
             builtin_functions: BuiltinFunction::build_map(),
@@ -28,7 +28,7 @@ impl Default for Context {
     }
 }
 
-impl Display for Context {
+impl Display for Context<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for function in self.sort_calls() {
             writeln!(f, "{function}")?;
@@ -38,11 +38,11 @@ impl Display for Context {
     }
 }
 
-impl Context {
-    pub fn sort_calls(&self) -> Vec<Arc<UserDefinedFunction>> {
-        fn depends(
-            expression: &Expression<FunctionValue>,
-            result: &mut Vec<Arc<UserDefinedFunction>>,
+impl<'input> Context<'input> {
+    pub fn sort_calls(&self) -> Vec<Arc<UserDefinedFunction<'input>>> {
+        fn depends<'i>(
+            expression: &'i Expression<FunctionValue<'i>>,
+            result: &mut Vec<Arc<UserDefinedFunction<'i>>>,
         ) {
             match expression {
                 Expression::Value(_) => (),
@@ -80,8 +80,8 @@ impl Context {
     }
 
     #[cfg_attr(not(test), allow(dead_code, unused_imports))]
-    pub fn from_expression<V>(source: &Expression<V>) -> Self {
-        fn helper<V>(source: &Expression<V>, context: &mut Context) {
+    pub fn from_expression<V>(source: &'input Expression<'input, V>) -> Self {
+        fn helper<'i, V>(source: &'i Expression<'i, V>, context: &mut Context<'i>) {
             match source {
                 Expression::Value(_) => (),
                 Expression::Op { left, right, .. } => {
@@ -96,7 +96,7 @@ impl Context {
                     if let Function::UserDefined(f) = function {
                         context
                             .user_defined_functions
-                            .insert(function.name().into(), f.clone());
+                            .insert(function.name(), f.clone());
                         helper(&f.expression, context);
                     }
                 }
@@ -108,15 +108,14 @@ impl Context {
         result
     }
 
-    fn function_names(&self) -> Vec<String> {
+    fn function_names(&self) -> impl Iterator<Item = &'input str> + '_ {
         self.builtin_functions
             .keys()
-            .map(|s| s.to_string())
-            .chain(self.user_defined_functions.keys().cloned())
-            .collect()
+            .copied()
+            .chain(self.user_defined_functions.keys().copied())
     }
 
-    pub fn get_function(&self, name: &str) -> Result<Function, Error> {
+    pub fn get_function(&self, name: &'input str) -> Result<Function<'input>, Error> {
         self.builtin_functions
             .get(name)
             .map(|f| Function::from(*f))
@@ -128,16 +127,19 @@ impl Context {
             })
             .with_context(|| UndefinedFunctionSnafu {
                 name,
-                options: self.function_names(),
+                options: self
+                    .function_names()
+                    .map(|s| s.to_string())
+                    .collect::<Vec<_>>(),
             })
     }
 
     pub fn add_function(
         &mut self,
-        name: String,
-        function: UserDefinedFunction,
+        name: &'input str,
+        function: UserDefinedFunction<'input>,
     ) -> Result<(), Error> {
-        if self.user_defined_functions.contains_key(&name) {
+        if self.user_defined_functions.contains_key(name) {
             return FunctionAlreadyExistSnafu { name }.fail();
         }
 
@@ -151,15 +153,18 @@ impl Context {
 }
 
 #[derive(Debug, Clone, PartialEq, derive_more::From, Serialize, Deserialize)]
-pub enum Function {
+pub enum Function<'input> {
     Builtin(BuiltinFunction),
 
+    #[serde(borrow)]
     #[serde(serialize_with = "serialize_user_defined")]
     #[serde(deserialize_with = "deserialize_user_defined")]
-    UserDefined(Arc<UserDefinedFunction>),
+    UserDefined(Arc<UserDefinedFunction<'input>>),
 }
 
-fn deserialize_user_defined<'de, D>(deserializer: D) -> Result<Arc<UserDefinedFunction>, D::Error>
+fn deserialize_user_defined<'de, D>(
+    deserializer: D,
+) -> Result<Arc<UserDefinedFunction<'de>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -173,11 +178,11 @@ where
     f.as_ref().serialize(serializer)
 }
 
-impl Function {
+impl<'input> Function<'input> {
     pub fn name(&self) -> &str {
         match self {
             Function::Builtin(b) => b.name(),
-            Function::UserDefined(u) => &u.name,
+            Function::UserDefined(u) => u.name,
         }
     }
 
