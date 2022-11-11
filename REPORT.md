@@ -3,6 +3,7 @@
 - [Macho: benchmarks](#macho-benchmarks)
 - [Pantano: cache locality](#pantano-cache-locality)
 - [Corrida: stage one](#corrida-stage-one)
+- [Corrida: stage two](#corrida-stage-two)
 
 ## Prelude
 
@@ -931,7 +932,7 @@ pub enum Expression<V> {
   1. Мы можем расположить все узлы выражения в вектор, заменив все `Box`'ы на индексы в
      векторе.
   2. Мы можем пройтись по по вектору с конца, складывая результаты выполненных для узла
-     вычислений в промежуточный буффер. В нулевом индексе окажется результат вычисления
+     вычислений в промежуточный буфер. В нулевом индексе окажется результат вычисления
      выражения.
 
   Звучит непросто, проиллюстрирую примером:
@@ -966,7 +967,7 @@ pub enum Expression<V> {
 
 ## Corrida: stage one
 
-В первом подходе к снаряду попытаемся улучшить скорость парсинга, для этого сначала нужно переехать
+В первом подходе к снаряду попытаемся улучшить скорость парсинга, для этого сначала нужно переехать на
 оптимизирующий лексер-генератор и невладеющие имена. В качестве такого будет взят `logos`, тогда
 токен будет определён следующим образом:
 
@@ -1112,7 +1113,7 @@ fn generate_names(count: usize) {
 }
 ```
 
-Для исправление проблемы с десериализацией нам сначала потребуется поправить аттрибуты `serde`:
+Для исправления проблемы с десериализацией нам сначала потребуется поправить аттрибуты `serde`:
 
 ```rust
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -1164,4 +1165,153 @@ pub fn deserialize_dataset(raw: &[u8]) -> Vec<Expression<f64>> {
 ```text
 parse/3000              time:   [980.54 ms 981.29 ms 982.14 ms]
                         change: [-66.930% -66.863% -66.803%] (p = 0.00 < 0.05)
+```
+
+## Corrida: stage two
+
+Теперь можно мигрировать на `recursion`. Для начала заведём структуру, отвечающую за узел:
+
+```rust
+pub enum Layer<'input, V, N> {
+    Value(V),
+
+    Op {
+        left: N,
+        op: Operation,
+        right: N,
+    },
+
+    FnCall {
+        function: Function<'input>,
+        arguments: Vec<N>,
+    },
+}
+```
+
+Теперь нужно реализовать ~~жертвы богам~~ требуемые `recursion` поведения:
+
+```rust
+impl<'input, A, B, V> MapLayer<B> for Layer<'input, V, A> {
+    type To = Layer<'input, V, B>;
+    type Unwrapped = A;
+
+    #[inline(always)]
+    fn map_layer<F: FnMut(Self::Unwrapped) -> B>(self, mut f: F) -> Self::To {
+        match self {
+            Layer::Value(v) => Self::To::Value(v),
+            Layer::Op { left, op, right } => Self::To::Op {
+                left: f(left),
+                op,
+                right: f(right),
+            },
+            Layer::FnCall {
+                function,
+                arguments,
+            } => Self::To::FnCall {
+                function,
+                arguments: arguments.into_iter().map(f).collect(),
+            },
+        }
+    }
+}
+
+impl<'l, 'input, A: Copy, B: 'l, V: Copy> MapLayer<B> for &'l Layer<'input, V, A> {
+    type To = Layer<'input, V, B>;
+    type Unwrapped = A;
+
+    #[inline(always)]
+    fn map_layer<F: FnMut(Self::Unwrapped) -> B>(self, mut f: F) -> Self::To {
+        match self {
+            Layer::Value(v) => Self::To::Value(*v),
+            Layer::Op { left, op, right } => Self::To::Op {
+                left: f(*left),
+                op: *op,
+                right: f(*right),
+            },
+            Layer::FnCall {
+                function,
+                arguments,
+            } => Self::To::FnCall {
+                function: function.clone(),
+                arguments: arguments.iter().copied().map(f).collect(),
+            },
+        }
+    }
+}
+```
+
+Теперь мы можем обличить в типах выражение:
+
+```rust
+pub type TopBlockExpression<'input> = BlockExpression<'input, f64>;
+
+pub struct BlockExpression<'input, V> {
+    inner: RecursiveTree<Layer<'input, V, ArenaIndex>, ArenaIndex>,
+}
+```
+
+Для выражения можно реализовать создание и вычисление:
+
+```rust
+impl<'input, V: Copy> BlockExpression<'input, V> {
+    #[inline]
+    pub fn new(source: Expression<'input, V>) -> Self {
+        Self {
+            inner: RecursiveTree::expand_layers(source, |layer| match layer {
+                Expression::Value(v) => Layer::Value(v),
+                Expression::Op { left, op, right } => Layer::Op {
+                    left: *left,
+                    op,
+                    right: *right,
+                },
+                Expression::FnCall {
+                    function,
+                    arguments,
+                } => Layer::FnCall {
+                    function,
+                    arguments,
+                },
+            }),
+        }
+    }
+}
+
+impl<'input> TopBlockExpression<'input> {
+    pub fn evaluate(&self) -> f64 {
+        self.inner.as_ref().collapse_layers(|node: Layer<f64, f64>| match node {
+            Layer::Value(v) => v,
+            Layer::Op { left, op, right } => op.evaluate(left, right),
+            Layer::FnCall {
+                function,
+                arguments,
+            } => function.evaluate(
+                &arguments
+                    .into_iter()
+                    .map(Expression::Value)
+                    .collect::<Vec<_>>(),
+            ),
+        })
+    }
+}
+```
+
+Выглядит сложно, давайте попробуем при помощи тестов выяснить, что мы всё написали верно:
+
+```rust
+proptest::proptest! {
+    #[test]
+    fn expression_equality(source in crate::properties::top_level_expression().prop_filter("must be normal", |e| e.evaluate().is_normal())) {
+        let evaluated = source.evaluate();
+
+        let block = TopBlockExpression::new(source);
+        prop_assert_eq!(evaluated, block.evaluate());
+    }
+}
+```
+
+Отлично, теперь осталось выяснить, какой будет прирост производительности:
+
+```text
+cache local/3000        time:   [57.367 ms 57.671 ms 58.185 ms]
+                        change: [-1.1773% -0.3219% +0.6466%] (p = 0.55 > 0.05)
 ```

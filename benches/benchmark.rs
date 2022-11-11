@@ -8,7 +8,7 @@ use evac::{
     grammar::TopLevelExpressionParser,
     lexer::EvacLexer,
     utils::{deserialize_dataset, read_dataset, DEFAULT_DATASET},
-    Expression,
+    Expression, block::TopBlockExpression,
 };
 use pprof::criterion::{Output, PProfProfiler};
 
@@ -63,6 +63,17 @@ fn benchmark(c: &mut Criterion) {
                 })
             })
         },
+    );
+
+    let dataset = dataset
+        .into_iter()
+        .map(TopBlockExpression::new)
+        .collect::<Vec<_>>();
+
+    c.bench_with_input(
+        BenchmarkId::new("cache local", dataset_size),
+        &dataset,
+        |b, input| b.iter(|| input.iter().map(TopBlockExpression::evaluate).sum::<f64>()),
     );
 }
 
