@@ -19,7 +19,7 @@ pub fn function_value(
 
 fn term<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     value_strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static, 'static>>>,
 ) -> impl Strategy<Value = Expression<V>> {
     prop_oneof![
         // Числово должно генерироваться в десять раз чаще, чем вызов функции.
@@ -29,8 +29,8 @@ fn term<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
 }
 
 fn user_defined_function(
-    functions: Vec<Arc<UserDefinedFunction<'static>>>,
-) -> impl Strategy<Value = UserDefinedFunction<'static>> {
+    functions: Vec<Arc<UserDefinedFunction<'static, 'static>>>,
+) -> impl Strategy<Value = UserDefinedFunction<'static, 'static>> {
     (
         // Имя функции имеет длину от восьми до шестнадцати символов и состоит из
         // символов класса `alpha`.
@@ -57,8 +57,8 @@ fn user_defined_function(
 
 fn function_call<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     value_strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
-) -> impl Strategy<Value = Expression<V>> {
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static, 'static>>>,
+) -> impl Strategy<Value = Expression<'static, 'static, V>> {
     // Если пользовательских функций нет, то создаём только встроенные.
     // Если на пустом векторе позвать `select`, получим ошибку генерации данных.
     if user_defined_functions.is_empty() {
@@ -91,8 +91,8 @@ fn function_call<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 's
 
 fn factor<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
-) -> impl Strategy<Value = Expression<'static, V>> {
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static, 'static>>>,
+) -> impl Strategy<Value = Expression<'static, 'static, V>> {
     // Так как `factor` определяется рекурсивно, мы хотим ограничить глубину рекурсии, чтобы не
     // пробить стэк при генерации данных. Для этого `proptest` предоставляет метод `prop_recursive`,
     // где первым аргументом идёт максимальная глубина рекурсии, вторым желаемое количество элементов,
@@ -111,8 +111,8 @@ fn factor<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
 
 fn expression<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'static>(
     value_strategy: S,
-    user_defined_functions: Vec<Arc<UserDefinedFunction<'static>>>,
-) -> impl Strategy<Value = Expression<'static, V>> + '_ {
+    user_defined_functions: Vec<Arc<UserDefinedFunction<'static, 'static>>>,
+) -> impl Strategy<Value = Expression<'static, 'static, V>> + '_ {
     factor(value_strategy.clone(), user_defined_functions.clone())
         .prop_recursive(4, 16, 4, move |inner| {
             (
@@ -127,7 +127,7 @@ fn expression<S: Strategy<Value = V> + Clone + 'static, V: Clone + Debug + 'stat
 
 // Набор функций, которые будут использоваться в выражении, будет определён рекурсивно.
 // Делается это потому, что одни функции могу ссылаться на другие (определённые ранее).
-fn functions() -> impl Strategy<Value = Vec<Arc<UserDefinedFunction<'static>>>> {
+fn functions() -> impl Strategy<Value = Vec<Arc<UserDefinedFunction<'static, 'static>>>> {
     // В качестве вырожденного случая будет использоваться функция, которая не ссылается ни
     // на какие другие функции.
     user_defined_function(Vec::new())
@@ -149,7 +149,7 @@ fn functions() -> impl Strategy<Value = Vec<Arc<UserDefinedFunction<'static>>>> 
         })
 }
 
-pub fn top_level_expression() -> impl Strategy<Value = Expression<'static, f64>> {
+pub fn top_level_expression() -> impl Strategy<Value = Expression<'static, 'static, f64>> {
     // Сначала мы генерируем функции, которые планируем использовать, после чего генерируем
     // выражение:
     functions().prop_flat_map(|user_defined_functions| expression(value(), user_defined_functions))

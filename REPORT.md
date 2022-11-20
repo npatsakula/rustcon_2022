@@ -4,6 +4,7 @@
 - [Pantano: cache locality](#pantano-cache-locality)
 - [Corrida: stage one](#corrida-stage-one)
 - [Corrida: stage two](#corrida-stage-two)
+- [Tango: JIT-компиляция](#tango-jit-компиляция)
 
 ## Prelude
 
@@ -1315,3 +1316,270 @@ proptest::proptest! {
 cache local/3000        time:   [57.367 ms 57.671 ms 58.185 ms]
                         change: [-1.1773% -0.3219% +0.6466%] (p = 0.55 > 0.05)
 ```
+
+## Tango: JIT-компиляция
+
+JIT -- Just-in-Time Compilation -- компиляция во время исполнения программы.
+
+Чтобы понять, что это такое и зачем оно нам нужно, давайте разберёмся, как вычиляется
+функция вида:
+
+```rust
+fn plusTwo(foo) = foo + 2.0;
+```
+
+Выражение этой функции будет иметь следующий вид:
+
+```rust
+// (1)
+Expression::op(
+  // (2)
+  Expression::Value(
+    // (3)
+    FunctionValue::Variable("foo")
+  ),
+  // (6)
+  Operation::Sum,
+  // (4)
+  Expression::Value(
+    // (5)
+    FunctionValue::Float(2.0)
+  ),
+)
+```
+
+С учётом того, что в Rust знание о том, на какой член `enum`'а мы смотрим,
+в рантайме кодируется числовым тэгом (именно по этой причине они называются
+tagged unions), вычисление этого выражения разбивается на следующие шаги:
+
+1. Декодируем тип выражения (1).
+2. Загружаем выражение (2).
+3. Декодируем тип выражения (2).
+4. Декодируем тип значения (3).
+5. Получаем значение (3), сходив к таблице аргументов.
+6. Загружаем выражение (4)
+7. Декодируем тип выражения (4).
+8. Декодируем тип значения (5).
+9. Декодируем тип оператора (6).
+10. Выполняем арифмитическую операцию, закодированную оператором.
+
+Выполнение каких-то пунктов можно ускорить, но это не отменяет факта того, что
+для вычисления такой маленькой функции мы выполняем очень большое количество
+действий. Если функция горячая, то есть вызывается множество раз, то имеет смысл
+её оптимизировать. Оптимизировать можно две вещи:
+
+1. Само вычисление функции: заинлайнить все вложенные функции; вычислить то, для
+   чего у нас достаточно данных; выоптимизировать вычисление не используемых
+   аргументов.
+2. Кодирование вычислений (1, 3, 4, 5, 6, 7, 8, 9): в идеале хотелось бы кодировать
+   вычисления в нативном для запускающей машине ассемблере. Чтобы оценить, насколько
+   эффективно может кодироваться, мы можем посмотреть на ассемблер для `x86-64-v3`:
+   ```asm
+   .LCPI0_0:
+           .quad   0x4000000000000000
+   plus_two:
+           vaddsd  xmm0, xmm0, qword ptr [rip + .LCPI0_0]
+           ret
+   ```
+   Вычисление функции заняло всего две инструкции, что намного эффективнее, чем в примере
+   выше.
+
+Мы можем самостоятельно написать оптимизатор и нативный кодогенератор для нашего языка,
+но делать этого не будем, взяв готовый оптимизирующий JIT-компилятор.
+
+В экосистеме Rust есть два готовых к промышленному применению решения, которые подойдут
+для решения этой задачи:
+
+1. LLVM JIT (`inkwell`): bloatware, написанный на C++ за много лет, используемый во множестве
+   проектов и имеющий хорошее тестовое покрытие (как регулярно показывает практика, не идеальное),
+   не самым лучшим интерфейсом и самым быстрым ассемблером на выходе.
+2. Cranelift (`cranelift*`): написанный на Rust легковесный JIT с высокой скоростью работы,
+   компромиссным интерфейсом и небольшим списком поддерживаемых платформ.
+
+Сейчас мы будем использовать LLVM JIT, проделать ту же работу с Cranelift оставлю домашней работой
+читателю.
+
+Минимальный набор, нужный для кодогенерации:
+
+1. `Context` -- контекст LLVM JIT, в котором живёт всё остальное.
+2. `Module` -- модуль, в контексте которого мы будем определять функции.
+3. `Builder` -- генератор LLVM IR для контекста.
+4. `ExecutionEngine` -- контекст исполнения, в котором будут находиться
+   сгенерированные функции.
+
+```rust
+#[derive(Debug)]
+pub struct Codegen<'ctx> {
+    context: &'ctx Context,
+    module: Module<'ctx>,
+    builder: Builder<'ctx>,
+    execution_engine: ExecutionEngine<'ctx>,
+    pass_manager: PassManager<FunctionValue<'ctx>>,
+}
+```
+
+`PassManager` нам нужен для того, чтобы определить набор оптимизаций, которые
+мы будем использовать при генерации функций. На вскидку нам нужно:
+
+1. Instruction combining pass: перенос константных значений в правую часть, 
+   сортировка битовых операций, упрощение инструкций сравнения, преобразование
+   умножение на степень двойки в битовый сдвиг и т.д..
+2. Instruction simplify pass: замена выражения, которое может быть вычислено
+   на этапе компиляции, на его вычисленное значение.
+3. Global value numbering pass: удаление неиспользуемых инструкций.
+4. CFG simplification pass: удаление неиспользуемого кода.
+5. Reassociate pass: перестановка выражений для более эффективного вычисления
+   на этапе компиляции: `4 + (x + 5)` -> `x + (4 + 5)`.
+6. Inline pass: подстановка тела вложенных функций во внешние. 
+
+У LLVM существует действительно большое количество оптимизаций, которые в той
+или иной мере влияют на производительность (на скорость компиляции так точно),
+но не будут рассмотрены в рамках этого мастер-класса.
+
+```rust
+pub fn new(context: &'ctx Context) -> Self {
+    let module = context.create_module("jit");
+    let builder = context.create_builder();
+    let execution_engine = module
+        .create_jit_execution_engine(OptimizationLevel::Aggressive)
+        .unwrap();
+
+    let pass = PassManager::create(&module);
+
+    pass.add_instruction_combining_pass();
+    pass.add_instruction_simplify_pass();
+    pass.add_new_gvn_pass();
+    pass.add_cfg_simplification_pass();
+    pass.add_reassociate_pass();
+    pass.add_function_inlining_pass();
+
+    pass.initialize();
+
+    Self {
+        context,
+        module,
+        builder,
+        execution_engine,
+        pass_manager: pass,
+    }
+}
+```
+
+Начнём, пожалуй, с самой простой части, а именно бинарных операций. Для того,
+чтобы определить функцию конвертации нам понадобится:
+
+1. Сама операция.
+2. Генератор LLVM IR (`Builder`).
+3. Выражение левой части.
+4. Выражение правой части.
+
+Возвращаться также будет выражение, полученное из генератора:
+
+```rust
+pub fn operation(
+    &self,
+    operation: Operation,
+    left: FloatValue<'ctx>,
+    right: FloatValue<'ctx>,
+) -> FloatValue<'ctx> {
+    match operation {
+        Operation::Sum => self.builder.build_float_add(left, right, "sum"),
+        Operation::Mul => self.builder.build_float_mul(left, right, "mul"),
+        Operation::Div => self.builder.build_float_div(left, right, "div"),
+        Operation::Sub => self.builder.build_float_sub(left, right, "sub"),
+    }
+}
+```
+
+Конвертировать выражение функции несколько сложнее, там у нас будет четыре случая:
+
+1. Числовое значение.
+2. Именованный аргумент функции: заменяем на индекс аргумента.
+3. Операция: конвертируем левую и правую часть, потом конвертируем операцию как
+   описано выше.
+4. Вызов функции: здесь мы предполагаем, что все вложенные функции уже были
+   конвертированы до этого, потому нам остаётся только получить их определения
+   из модуля и подставить в него аргументы.
+
+```rust
+    pub fn function_expression(
+        &self,
+        expression: &Expression<FValue>,
+        function: &FunctionValue<'ctx>,
+        args: &[&str],
+    ) -> FloatValue<'ctx> {
+        let expr = |expr| self.function_expression(expr, function, args);
+        match expression {
+            Expression::Value(FValue::Float(v)) => self.context.f64_type().const_float(*v),
+            Expression::Value(FValue::Variable(v)) => {
+                let index = args.iter().position(|a| a == v).unwrap();
+                function
+                    .get_nth_param(index as u32)
+                    .unwrap()
+                    .into_float_value()
+            }
+            Expression::Op { left, op, right } => {
+                let left = expr(left.as_ref());
+                let right = expr(right.as_ref());
+                self.operation(*op, left, right)
+            }
+            Expression::FnCall {
+                function,
+                arguments,
+            } => {
+                let function = self.module.get_function(function.name()).unwrap();
+
+                let args = arguments
+                    .iter()
+                    .map(expr)
+                    .map(Into::<BasicMetadataValueEnum>::into)
+                    .collect::<Vec<_>>();
+
+                self.builder
+                    .build_call(function, &args, "call")
+                    .try_as_basic_value()
+                    .left()
+                    .unwrap()
+                    .into_float_value()
+            }
+        }
+    }
+```
+
+Остаётся собрать всё вместе. Для определения функции нам понадобится:
+
+1. Получить тип возвращаемого значения и аргументов.
+2. Разместить сигнатуру функции в модуле.
+3. Добавить базовый блок функции: блоки нужны для условных выражений
+   и циклов, т.к. на них можно делать goto.
+4. Добавить возврат из функции, куда сложить выражение её вычисления.
+
+```rust
+pub fn user_defined_function(
+    &self,
+    UserDefinedFunction {
+        name,
+        args,
+        expression,
+    }: &UserDefinedFunction,
+) -> FunctionValue {
+    let f64_type = self.context.f64_type();
+    let function_type = f64_type.fn_type(&vec![f64_type.into(); args.len()], false);
+    let function = self.module.add_function(name, function_type, None);
+
+    let basic_block = self.context.append_basic_block(function, "entry");
+    self.builder.position_at_end(basic_block);
+
+    let res = self.function_expression(expression, &function, args);
+    self.builder.build_return(Some(&res));
+
+    self.execution_engine.get_function_value(name).unwrap()
+}
+```
+
+Если при чтении вам показалось, что мы недостаточно типизировано работает с глобальным
+состоянием -- вам не показалось. У нам нет гарантии на типах (на этапе компиляции), что
+последовательность действий, которую мы выполняем, приведёт к корректно работающей функции.
+Чтобы провалидировать написанную функцию есть метод `verify`, но никто не обязывает его
+вызывать, потому вполне вероятна ситуация, при которой вызов функции закончится illegal
+instruction или что-то в таком духе.

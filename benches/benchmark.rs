@@ -4,11 +4,12 @@ use criterion::{
     black_box, criterion_group, criterion_main, profiler::Profiler, BenchmarkId, Criterion,
 };
 use evac::{
+    block::TopBlockExpression,
     function::Context,
     grammar::TopLevelExpressionParser,
     lexer::EvacLexer,
     utils::{deserialize_dataset, read_dataset, DEFAULT_DATASET},
-    Expression, block::TopBlockExpression,
+    Expression,
 };
 use pprof::criterion::{Output, PProfProfiler};
 

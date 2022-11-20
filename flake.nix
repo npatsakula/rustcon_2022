@@ -1,6 +1,6 @@
 {
   inputs = {
-    nixpkgs.url = "github:nixos/nixpkgs";
+    nixpkgs.url = "github:NixOS/nixpkgs/nixpkgs-unstable";
     utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-compat = { url = "github:edolstra/flake-compat"; flake = false; };
@@ -38,13 +38,17 @@
       });
 
       in rec {
-        devShell = pkgs.mkShell rec {
+        devShell = pkgs.mkShell.override {
+          stdenv = pkgs.llvmPackages_14.stdenv;
+        } rec {
           buildInputs = with pkgs; [
-            rustc cargo rust-analyzer
+            rustc cargo rust-analyzer libffi zlib libxml2 ncurses.dev
             valgrind gperftools pprof graphviz
             tex
+            pkg-config glibc
           ];
           FONTCONFIG_FILE="${fonts}";
+          LLVM_SYS_140_PREFIX = "${pkgs.llvmPackages_14.llvm.dev}/";
         };
       });
 }

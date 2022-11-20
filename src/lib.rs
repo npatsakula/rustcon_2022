@@ -3,7 +3,7 @@ use std::fmt::Display;
 use lalrpop_util::lalrpop_mod;
 
 pub mod function;
-use function::{Context, Function};
+use function::{Context, Function, FunctionTrait};
 
 pub mod error;
 use error::*;
@@ -41,8 +41,8 @@ impl Operation {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub enum Expression<'input, V> {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize, derive_more::From)]
+pub enum Expression<'input, 'ctx, V> {
     Value(V),
 
     Op {
@@ -53,12 +53,12 @@ pub enum Expression<'input, V> {
 
     FnCall {
         #[serde(borrow)]
-        function: Function<'input>,
+        function: Function<'input, 'ctx>,
         arguments: Vec<Self>,
     },
 }
 
-impl<'input, V: Display> Display for Expression<'input, V> {
+impl<'input, 'ctx, V: Display> Display for Expression<'input, 'ctx, V> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             Expression::Value(v) => v.fmt(f),
@@ -84,7 +84,7 @@ impl<'input, V: Display> Display for Expression<'input, V> {
     }
 }
 
-impl<'input, V> Expression<'input, V> {
+impl<'input, 'ctx, V> Expression<'input, 'ctx, V> {
     pub fn op(lhs: Self, op: Operation, rhs: Self) -> Self {
         Self::Op {
             left: lhs.into(),
@@ -94,7 +94,7 @@ impl<'input, V> Expression<'input, V> {
     }
 
     pub fn function_call(
-        context: &Context<'input>,
+        context: &Context<'input, 'ctx>,
         name: &'input str,
         arguments: Vec<Self>,
     ) -> Result<Self, Error> {
@@ -128,7 +128,7 @@ impl<'input, V> Expression<'input, V> {
     }
 }
 
-impl Expression<'_, f64> {
+impl<'i, 'ctx> Expression<'i, 'ctx, f64> {
     pub fn evaluate(&self) -> f64 {
         match self {
             Self::Value(v) => *v,
@@ -136,14 +136,16 @@ impl Expression<'_, f64> {
             Self::FnCall {
                 function,
                 arguments,
-            } => function.evaluate(arguments),
+            } => function.evaluate_unwrapped(arguments),
         }
     }
 }
 
 pub mod prelude {
     pub use crate::error::*;
-    pub use crate::function::{BuiltinFunction, Context, FunctionValue, UserDefinedFunction};
+    pub use crate::function::{
+        BuiltinFunction, Context, FunctionTrait, FunctionValue, UserDefinedFunction, Function
+    };
     pub use crate::{Expression, Operation};
 }
 

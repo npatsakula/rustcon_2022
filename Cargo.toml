@@ -8,6 +8,11 @@ version = "0.99"
 default-features = false
 features = ["from", "display"]
 
+[dependencies.inkwell]
+git = "https://github.com/TheDan64/inkwell"
+branch = "master"
+features = ["llvm14-0"]
+
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
 snafu = "0.7"
@@ -21,16 +26,17 @@ rand = "0.8"
 
 proptest = "1.0"
 proptest-derive = "0.3"
-logos = "0.12.1"
-fast-float = "0.2.0"
-recursion = "0.3.3"
+logos = "0.12"
+fast-float = "0.2"
+recursion = "0.3"
+enum_dispatch = "0.3"
+itertools = "0.10"
 
 [build-dependencies]
 lalrpop = { version = "0.19", features = ["lexer"] }
 regex_generate = "=0.2.1"
 quote = "1.0"
 rand = "0.7"
-rand_core = "0.6"
 
 [dev-dependencies]
 pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
