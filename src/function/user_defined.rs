@@ -1,25 +1,27 @@
-use std::{collections::HashMap, fmt::Display};
-
+use derive_more::{Display, From};
+use itertools::Itertools;
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt::Display};
 
 use crate::prelude::*;
 
-#[derive(
-    Debug, Clone, PartialEq, derive_more::From, derive_more::Display, Serialize, Deserialize,
-)]
+use super::FunctionTrait;
+
+#[derive(Debug, Clone, PartialEq, From, Display, Serialize, Deserialize)]
 pub enum FunctionValue<'input> {
     Float(f64),
     Variable(&'input str),
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct UserDefinedFunction<'input> {
+pub struct UserDefinedFunction<'input, 'ctx> {
     pub(crate) name: &'input str,
     pub(crate) args: Vec<&'input str>,
-    pub(crate) expression: Expression<'input, FunctionValue<'input>>,
+    #[serde(borrow)]
+    pub(crate) expression: Expression<'input, 'ctx, FunctionValue<'input>>,
 }
 
-impl Display for UserDefinedFunction<'_> {
+impl<'input, 'jit> Display for UserDefinedFunction<'input, 'jit> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(f, "fn {}(", self.name)?;
 
@@ -36,7 +38,7 @@ impl Display for UserDefinedFunction<'_> {
     }
 }
 
-impl<'input> UserDefinedFunction<'input> {
+impl<'input, 'jit> UserDefinedFunction<'input, 'jit> {
     fn build_frequency_map(source: &[&'input str]) -> HashMap<&'input str, usize> {
         source
             .iter()
@@ -87,7 +89,7 @@ impl<'input> UserDefinedFunction<'input> {
     pub fn new(
         name: &'input str,
         args: Vec<&'input str>,
-        expression: Expression<'input, FunctionValue<'input>>,
+        expression: Expression<'input, 'jit, FunctionValue<'input>>,
     ) -> Result<Self, Error> {
         Self::check_duplicate(&args)?;
         Self::check_binds(&args, &expression)?;
@@ -102,30 +104,42 @@ impl<'input> UserDefinedFunction<'input> {
         self.args.len()
     }
 
-    fn evaluate_helper(expression: &Expression<FunctionValue>, args: &HashMap<&str, f64>) -> f64 {
+    fn evaluate_helper(
+        expression: &Expression<FunctionValue>,
+        args: &HashMap<&str, f64>,
+    ) -> Result<f64, Error> {
         let evaluate_helper = |expr| Self::evaluate_helper(expr, args);
         match expression {
-            Expression::Value(FunctionValue::Float(v)) => *v,
-            Expression::Value(FunctionValue::Variable(name)) => *args.get(name).unwrap(),
+            Expression::Value(FunctionValue::Float(v)) => Ok(*v),
+            Expression::Value(FunctionValue::Variable(name)) => Ok(*args.get(name).unwrap()),
             Expression::Op { left, op, right } => {
-                op.evaluate(evaluate_helper(left), evaluate_helper(right))
+                Ok(op.evaluate(evaluate_helper(left)?, evaluate_helper(right)?))
             }
             Expression::FnCall {
                 function,
                 arguments,
             } => {
-                let arguments = arguments
+                let arguments: Vec<_> = arguments
                     .iter()
-                    .map(evaluate_helper)
-                    .map(Expression::Value)
-                    .collect::<Vec<_>>();
+                    .map(|e| evaluate_helper(e).map(Expression::Value))
+                    .try_collect()?;
 
                 function.evaluate(&arguments)
             }
         }
     }
+}
 
-    pub fn evaluate(&self, arguments: &[Expression<f64>]) -> Result<f64, Error> {
+impl<'input, 'ctx> FunctionTrait<'input> for UserDefinedFunction<'input, 'ctx> {
+    fn name(&self) -> &'input str {
+        self.name
+    }
+
+    fn arguments_count(&self) -> usize {
+        self.args.len()
+    }
+
+    fn evaluate(&self, arguments: &[Expression<f64>]) -> Result<f64, Error> {
         snafu::ensure!(
             arguments.len() == self.argument_count(),
             WrongArgumentsAmountSnafu {
@@ -142,6 +156,6 @@ impl<'input> UserDefinedFunction<'input> {
             .map(|(name, expr)| (*name, expr.evaluate()))
             .collect::<HashMap<_, _>>();
 
-        Ok(Self::evaluate_helper(&self.expression, &map))
+        Self::evaluate_helper(&self.expression, &map)
     }
 }
