@@ -13,21 +13,8 @@ pub enum BuiltinFunction {
     Sin,
 }
 
-impl BuiltinFunction {
-    pub fn build_map() -> HashMap<&'static str, Self> {
-        [("pi", Self::Pi), ("cos", Self::Cos), ("sin", Self::Sin)]
-            .into_iter()
-            .collect()
-    }
-
-    pub const fn args_count(&self) -> usize {
-        match self {
-            Self::Pi => 0,
-            Self::Cos | Self::Sin => 1,
-        }
-    }
-
-    pub const fn name(&self) -> &str {
+impl<'input> super::FunctionTrait<'input> for BuiltinFunction {
+    fn name(&self) -> &'input str {
         match self {
             Self::Pi => "pi",
             Self::Cos => "cos",
@@ -35,20 +22,35 @@ impl BuiltinFunction {
         }
     }
 
-    pub fn evaluate(&self, args: &[Expression<f64>]) -> Result<f64, Error> {
+    fn arguments_count(&self) -> usize {
+        match self {
+            Self::Pi => 0,
+            Self::Cos | Self::Sin => 1,
+        }
+    }
+
+    fn evaluate(&self, arguments: &[Expression<f64>]) -> Result<f64, Error> {
         snafu::ensure!(
-            args.len() == self.args_count(),
+            arguments.len() == self.arguments_count(),
             WrongArgumentsAmountSnafu {
                 name: self.name(),
-                expected: self.args_count(),
-                parsed: args.len(),
+                expected: self.arguments_count(),
+                parsed: arguments.len(),
             }
         );
 
         Ok(match self {
-            BuiltinFunction::Pi => std::f64::consts::PI,
-            BuiltinFunction::Cos => args[0].evaluate().cos(),
-            BuiltinFunction::Sin => args[0].evaluate().sin(),
+            Self::Pi => std::f64::consts::PI,
+            Self::Cos => arguments[0].evaluate().cos(),
+            Self::Sin => arguments[0].evaluate().sin(),
         })
+    }
+}
+
+impl BuiltinFunction {
+    pub fn build_map() -> HashMap<&'static str, Self> {
+        [("pi", Self::Pi), ("cos", Self::Cos), ("sin", Self::Sin)]
+            .into_iter()
+            .collect()
     }
 }

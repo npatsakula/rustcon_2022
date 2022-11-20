@@ -1,4 +1,7 @@
-use crate::{function::Function, prelude::*};
+use crate::{
+    function::{Function, FunctionTrait},
+    prelude::*,
+};
 
 use recursion::{
     map_layer::MapLayer,
@@ -6,7 +9,7 @@ use recursion::{
     Collapse, Expand,
 };
 
-pub enum Layer<'input, V, N> {
+pub enum Layer<'input, 'ctx, V, N> {
     Value(V),
 
     Op {
@@ -16,13 +19,13 @@ pub enum Layer<'input, V, N> {
     },
 
     FnCall {
-        function: Function<'input>,
+        function: Function<'input, 'ctx>,
         arguments: Vec<N>,
     },
 }
 
-impl<'l, 'input, A: Copy, B: 'l, V: Copy> MapLayer<B> for &'l Layer<'input, V, A> {
-    type To = Layer<'input, V, B>;
+impl<'l, 'input, 'ctx, A: Copy, B: 'l, V: Copy> MapLayer<B> for &'l Layer<'input, 'ctx, V, A> {
+    type To = Layer<'input, 'ctx, V, B>;
     type Unwrapped = A;
 
     #[inline(always)]
@@ -45,8 +48,8 @@ impl<'l, 'input, A: Copy, B: 'l, V: Copy> MapLayer<B> for &'l Layer<'input, V, A
     }
 }
 
-impl<'input, A, B, V> MapLayer<B> for Layer<'input, V, A> {
-    type To = Layer<'input, V, B>;
+impl<'input, 'ctx, A, B, V> MapLayer<B> for Layer<'input, 'ctx, V, A> {
+    type To = Layer<'input, 'ctx, V, B>;
     type Unwrapped = A;
 
     #[inline(always)]
@@ -69,15 +72,15 @@ impl<'input, A, B, V> MapLayer<B> for Layer<'input, V, A> {
     }
 }
 
-pub type TopBlockExpression<'input> = BlockExpression<'input, f64>;
+pub type TopBlockExpression<'input, 'ctx> = BlockExpression<'input, 'ctx, f64>;
 
-pub struct BlockExpression<'input, V> {
-    inner: RecursiveTree<Layer<'input, V, ArenaIndex>, ArenaIndex>,
+pub struct BlockExpression<'input, 'ctx, V> {
+    inner: RecursiveTree<Layer<'input, 'ctx, V, ArenaIndex>, ArenaIndex>,
 }
 
-impl<'input, V: Copy> BlockExpression<'input, V> {
+impl<'input, 'ctx, V: Copy> BlockExpression<'input, 'ctx, V> {
     #[inline]
-    pub fn new(source: Expression<'input, V>) -> Self {
+    pub fn new(source: Expression<'input, 'ctx, V>) -> Self {
         Self {
             inner: RecursiveTree::expand_layers(source, |layer| match layer {
                 Expression::Value(v) => Layer::Value(v),
@@ -98,21 +101,23 @@ impl<'input, V: Copy> BlockExpression<'input, V> {
     }
 }
 
-impl<'input> TopBlockExpression<'input> {
+impl<'input, 'ctx> TopBlockExpression<'input, 'ctx> {
     pub fn evaluate(&self) -> f64 {
-        self.inner.as_ref().collapse_layers(|node: Layer<f64, f64>| match node {
-            Layer::Value(v) => v,
-            Layer::Op { left, op, right } => op.evaluate(left, right),
-            Layer::FnCall {
-                function,
-                arguments,
-            } => function.evaluate(
-                &arguments
-                    .into_iter()
-                    .map(Expression::Value)
-                    .collect::<Vec<_>>(),
-            ),
-        })
+        self.inner
+            .as_ref()
+            .collapse_layers(|node: Layer<f64, f64>| match node {
+                Layer::Value(v) => v,
+                Layer::Op { left, op, right } => op.evaluate(left, right),
+                Layer::FnCall {
+                    function,
+                    arguments,
+                } => function.evaluate_unwrapped(
+                    &arguments
+                        .into_iter()
+                        .map(Expression::Value)
+                        .collect::<Vec<_>>(),
+                ),
+            })
     }
 }
 

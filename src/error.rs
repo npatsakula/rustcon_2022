@@ -1,5 +1,6 @@
 use std::fmt::Display;
 
+use inkwell::execution_engine::FunctionLookupError;
 use lalrpop_util::ParseError;
 use snafu::Location;
 
@@ -39,6 +40,14 @@ pub enum Error {
 
     #[snafu(display("Failed to parse expression: {message}"))]
     Parse { message: String, location: Location },
+
+    #[snafu(display("Failed to lookup function '{function}' in module '{module}': {source}"))]
+    FunctionLookup {
+        source: FunctionLookupError,
+        function: String,
+        module: String,
+        location: Location,
+    }
 }
 
 impl<L: Display, T: Display, E: Display> From<ParseError<L, T, E>> for Error {
