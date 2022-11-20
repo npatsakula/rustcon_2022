@@ -8,7 +8,8 @@ fn generate_names(count: usize) {
 
     let mut generator = regex_generate::Generator::new(
         // Имя состоит из символов класса `alpha`, длина от двух до двенадцати символов.
-        r"\p{alpha}{2,12}",
+        // r"(?x)([[:alphabetical:]]{2,12})",
+        r"[a-z]{12}",
         rand::thread_rng(),
         regex_generate::DEFAULT_MAX_REPEAT,
     )

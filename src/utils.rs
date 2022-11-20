@@ -7,10 +7,13 @@ use std::{
 use proptest::{strategy::Strategy, strategy::ValueTree, test_runner::TestRunner};
 use rand::Rng;
 
-use crate::{Expression, Operation};
+use crate::{
+    properties::{functions, top_level_expression},
+    Expression, Operation, function::Function,
+};
 
 // Генерируем одно корректное выражение:
-pub fn gen_correct_expression() -> Expression<'static, f64> {
+pub fn gen_correct_expression() -> Expression<'static, 'static, f64> {
     let mut runner = TestRunner::default();
     crate::properties::top_level_expression()
         .new_tree(&mut runner)
@@ -18,9 +21,29 @@ pub fn gen_correct_expression() -> Expression<'static, f64> {
         .current()
 }
 
+pub fn generate_correct_call() -> Expression<'static, 'static, f64> {
+    let mut runner = TestRunner::default();
+    functions()
+        .prop_map(|mut fs| {
+            fs.sort_by_key(|e| e.expression.leafs_count());
+            fs.pop().unwrap()
+        })
+        .prop_flat_map(|function| {
+            proptest::collection::vec(top_level_expression(), function.argument_count()).prop_map(
+                move |arguments| Expression::FnCall {
+                    function: Function::UserDefined(function.clone()),
+                    arguments,
+                },
+            )
+        })
+        .new_tree(&mut runner)
+        .unwrap()
+        .current()
+}
+
 // Склеиваем из корректных выражений большее при помощи операции
 // с низким приоритетом.
-pub fn generate_expression_size(size: usize) -> Expression<'static, f64> {
+pub fn generate_expression_size(size: usize) -> Expression<'static, 'static, f64> {
     let mut current = 0usize;
     let mut result = Expression::Value(11.0);
 
@@ -37,7 +60,7 @@ pub fn generate_expression_size(size: usize) -> Expression<'static, f64> {
 pub fn generate_dataset(
     size: usize,
     range: RangeInclusive<usize>,
-) -> Vec<Expression<'static, f64>> {
+) -> Vec<Expression<'static, 'static, f64>> {
     (0..size)
         .map(move |_| rand::thread_rng().gen_range(range.clone()))
         .map(generate_expression_size)
@@ -45,7 +68,7 @@ pub fn generate_dataset(
 }
 
 // При помощи частичного применения делаем генератор по-умолчанию.
-pub fn generate_default_dataset() -> Vec<Expression<'static, f64>> {
+pub fn generate_default_dataset() -> Vec<Expression<'static, 'static, f64>> {
     generate_dataset(3_000, 900..=950)
 }
 

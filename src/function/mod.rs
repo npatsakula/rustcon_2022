@@ -5,6 +5,8 @@ pub use user_defined::{FunctionValue, UserDefinedFunction};
 pub mod builtin;
 pub use builtin::BuiltinFunction;
 
+pub mod jit;
+
 use crate::{error::*, Expression};
 
 use std::collections::HashMap;
@@ -13,22 +15,26 @@ use std::sync::Arc;
 
 use snafu::OptionExt;
 
-#[derive(Debug, Clone)]
-pub struct Context<'input> {
+use self::jit::{Codegen, EvacJitFunction};
+
+#[derive(Debug)]
+pub struct Context<'input, 'ctx> {
     builtin_functions: HashMap<&'static str, BuiltinFunction>,
-    user_defined_functions: HashMap<&'input str, Arc<UserDefinedFunction<'input>>>,
+    user_defined_functions: HashMap<&'input str, Arc<UserDefinedFunction<'input, 'ctx>>>,
+    _jit_context: Option<Codegen<'ctx>>,
 }
 
-impl<'i> Default for Context<'i> {
+impl<'i, 'j> Default for Context<'i, 'j> {
     fn default() -> Self {
         Self {
             builtin_functions: BuiltinFunction::build_map(),
             user_defined_functions: Default::default(),
+            _jit_context: None,
         }
     }
 }
 
-impl Display for Context<'_> {
+impl<'input, 'jit> Display for Context<'input, 'jit> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         for function in self.sort_calls() {
             writeln!(f, "{function}")?;
@@ -38,11 +44,11 @@ impl Display for Context<'_> {
     }
 }
 
-impl<'input> Context<'input> {
-    pub fn sort_calls(&self) -> Vec<Arc<UserDefinedFunction<'input>>> {
-        fn depends<'i>(
-            expression: &'i Expression<FunctionValue<'i>>,
-            result: &mut Vec<Arc<UserDefinedFunction<'i>>>,
+impl<'input, 'jit> Context<'input, 'jit> {
+    pub fn sort_calls(&self) -> Vec<Arc<UserDefinedFunction<'input, 'jit>>> {
+        fn depends<'i, 'j>(
+            expression: &'i Expression<'i, 'j, FunctionValue<'i>>,
+            result: &mut Vec<Arc<UserDefinedFunction<'i, 'j>>>,
         ) {
             match expression {
                 Expression::Value(_) => (),
@@ -80,8 +86,8 @@ impl<'input> Context<'input> {
     }
 
     #[cfg_attr(not(test), allow(dead_code, unused_imports))]
-    pub fn from_expression<V>(source: &'input Expression<'input, V>) -> Self {
-        fn helper<'i, V>(source: &'i Expression<'i, V>, context: &mut Context<'i>) {
+    pub fn from_expression<V>(source: &'input Expression<'input, 'jit, V>) -> Self {
+        fn helper<'i, 'j, V>(source: &'i Expression<'i, 'j, V>, context: &mut Context<'i, 'j>) {
             match source {
                 Expression::Value(_) => (),
                 Expression::Op { left, right, .. } => {
@@ -115,7 +121,7 @@ impl<'input> Context<'input> {
             .chain(self.user_defined_functions.keys().copied())
     }
 
-    pub fn get_function(&self, name: &'input str) -> Result<Function<'input>, Error> {
+    pub fn get_function(&self, name: &'input str) -> Result<Function<'input, 'jit>, Error> {
         self.builtin_functions
             .get(name)
             .map(|f| Function::from(*f))
@@ -137,7 +143,7 @@ impl<'input> Context<'input> {
     pub fn add_function(
         &mut self,
         name: &'input str,
-        function: UserDefinedFunction<'input>,
+        function: UserDefinedFunction<'input, 'jit>,
     ) -> Result<(), Error> {
         if self.user_defined_functions.contains_key(name) {
             return FunctionAlreadyExistSnafu { name }.fail();
@@ -152,19 +158,23 @@ impl<'input> Context<'input> {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, derive_more::From, Serialize, Deserialize)]
-pub enum Function<'input> {
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[enum_dispatch::enum_dispatch(FunctionTrait)]
+pub enum Function<'input, 'ctx> {
     Builtin(BuiltinFunction),
 
     #[serde(borrow)]
     #[serde(serialize_with = "serialize_user_defined")]
     #[serde(deserialize_with = "deserialize_user_defined")]
-    UserDefined(Arc<UserDefinedFunction<'input>>),
+    UserDefined(Arc<UserDefinedFunction<'input, 'ctx>>),
+
+    #[serde(skip)]
+    Jited(EvacJitFunction<'input, 'ctx>),
 }
 
 fn deserialize_user_defined<'de, D>(
     deserializer: D,
-) -> Result<Arc<UserDefinedFunction<'de>>, D::Error>
+) -> Result<Arc<UserDefinedFunction<'de, 'de>>, D::Error>
 where
     D: Deserializer<'de>,
 {
@@ -178,25 +188,26 @@ where
     f.as_ref().serialize(serializer)
 }
 
-impl<'input> Function<'input> {
-    pub fn name(&self) -> &str {
-        match self {
-            Function::Builtin(b) => b.name(),
-            Function::UserDefined(u) => u.name,
-        }
+#[enum_dispatch::enum_dispatch]
+pub trait FunctionTrait<'input> {
+    fn name(&self) -> &'input str;
+    fn arguments_count(&self) -> usize;
+    fn evaluate(&self, arguments: &[Expression<f64>]) -> Result<f64, Error>;
+    fn evaluate_unwrapped(&self, arguments: &[Expression<f64>]) -> f64 {
+        self.evaluate(arguments).unwrap()
+    }
+}
+
+impl<'input, T: FunctionTrait<'input>> FunctionTrait<'input> for Arc<T> {
+    fn name(&self) -> &'input str {
+        self.as_ref().name()
     }
 
-    pub fn arguments_count(&self) -> usize {
-        match self {
-            Function::Builtin(b) => b.args_count(),
-            Function::UserDefined(u) => u.argument_count(),
-        }
+    fn arguments_count(&self) -> usize {
+        self.as_ref().arguments_count()
     }
 
-    pub fn evaluate(&self, arguments: &[Expression<f64>]) -> f64 {
-        match self {
-            Function::Builtin(b) => b.evaluate(arguments).unwrap(),
-            Function::UserDefined(u) => u.evaluate(arguments).unwrap(),
-        }
+    fn evaluate(&self, arguments: &[Expression<f64>]) -> Result<f64, Error> {
+        self.as_ref().evaluate(arguments)
     }
 }

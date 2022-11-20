@@ -1,7 +1,7 @@
 use crate::prelude::*;
 use crate::lexer::Token;
 
-grammar<'input>(context: &mut Context<'input>);
+grammar<'input, 'ctx>(context: &mut Context<'input, 'ctx>);
 
 extern {
     // LALRPOP поддерживает пользовательские ошибки
@@ -65,7 +65,7 @@ FunctionValue: FunctionValue<'input> = {
     Name => <>.into(),
 }
 
-Term<Value>: Expression<'input, Value> = {
+Term<Value>: Expression<'input, 'ctx, Value> = {
     Value => Expression::Value(<>),
     // Скобки подымают приоритет операции,
     // потому выражение в скобках имеет такой же
@@ -87,7 +87,7 @@ Term<Value>: Expression<'input, Value> = {
     }
 }
 
-Tier<Value, Operation, Right>: Expression<'input, Value> = {
+Tier<Value, Operation, Right>: Expression<'input, 'ctx, Value> = {
     Tier<Value, Operation, Right> Operation Right => Expression::op(<>),
     Right,
 }
@@ -114,7 +114,7 @@ Function: () = {
     }
 }
 
-pub TopLevelExpression: Expression<'input, f64> = {
+pub TopLevelExpression: Expression<'input, 'ctx, f64> = {
     // Пользовательский ввод может иметь ноль и более определённых функций
     // и выражение, в которых они используются:
     Function* <Expression<Float>> => <>,

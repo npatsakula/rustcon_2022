@@ -4,12 +4,14 @@ use criterion::{
     black_box, criterion_group, criterion_main, profiler::Profiler, BenchmarkId, Criterion,
 };
 use evac::{
-    function::Context,
+    block::TopBlockExpression,
+    function::{Context, jit::Codegen},
     grammar::TopLevelExpressionParser,
     lexer::EvacLexer,
-    utils::{deserialize_dataset, read_dataset, DEFAULT_DATASET},
-    Expression, block::TopBlockExpression,
+    utils::{deserialize_dataset, read_dataset, DEFAULT_DATASET, generate_correct_call},
+    Expression,
 };
+use itertools::Itertools;
 use pprof::criterion::{Output, PProfProfiler};
 
 fn benchmark(c: &mut Criterion) {
@@ -65,15 +67,40 @@ fn benchmark(c: &mut Criterion) {
         },
     );
 
-    let dataset = dataset
-        .into_iter()
+    let block_dataset = dataset
+        .iter()
+        .cloned()
         .map(TopBlockExpression::new)
         .collect::<Vec<_>>();
 
     c.bench_with_input(
         BenchmarkId::new("cache local", dataset_size),
-        &dataset,
+        &block_dataset,
         |b, input| b.iter(|| input.iter().map(TopBlockExpression::evaluate).sum::<f64>()),
+    );
+
+    let calls = (0..1000).map(|_| generate_correct_call()).collect_vec();
+
+    let jit_context = inkwell::context::Context::create();
+    let dataset = calls.clone().into_iter().map(|expr| {
+        let codegen = Codegen::new(&jit_context);
+        for f in  Context::from_expression(&expr).sort_calls() {
+            codegen.user_defined_function(f.as_ref()).unwrap();
+        }
+
+        expr.jitify_inner(&codegen)
+    }).collect_vec();
+
+    c.bench_with_input(
+        BenchmarkId::new("compiled calls", dataset_size),
+        &dataset,
+        |b, input| b.iter(|| input.iter().map(Expression::evaluate).sum::<f64>()),
+    );
+
+    c.bench_with_input(
+        BenchmarkId::new("calls", dataset_size),
+        &calls,
+        |b, input| b.iter(|| input.iter().map(Expression::evaluate).sum::<f64>()),
     );
 }
 
