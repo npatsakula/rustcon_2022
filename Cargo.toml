@@ -8,54 +8,32 @@ version = "0.99"
 default-features = false
 features = ["from", "display"]
 
-# [dependencies.inkwell]
-# git = "https://github.com/TheDan64/inkwell"
-# branch = "master"
-# features = ["llvm14-0-no-llvm-linking"]
-
 [dependencies]
 clap = { version = "4.0", features = ["derive"] }
+snafu = "0.7"
 
 lalrpop-util = { version = "0.19", features = ["lexer"] }
-serde = { version = "1.0", features = ["derive"] }
-proptest-derive = "0.3"
 
-snafu = "0.7"
-proptest = "1.0"
-bumpalo = { version = "3.11.1", features = ["boxed"] }
-tramp = "0.3.0"
-slab = "0.4.7"
-recursion = "0.3.3"
-cpuprofiler = "0.0.4"
-rand = "0.8.5"
+serde = { version = "1.0", features = ["derive"] }
 lz4_flex = "0.9"
 bincode = "1.3"
+rand = "0.8"
+
+proptest = "1.0"
+proptest-derive = "0.3"
 
 [build-dependencies]
 lalrpop = { version = "0.19", features = ["lexer"] }
 
 [dev-dependencies]
 pprof = { version = "0.11", features = ["criterion", "flamegraph"] }
-mimalloc-rust = "0.2"
-once_cell = "1.16"
+cpuprofiler = "0.0.4"
 test-case = "2.2"
 criterion = "0.4"
-iai = "0.1"
 
 [profile.release]
 debug = true
 
-[profile.bench]
-debug = 2
-
 [[bench]]
 name = "benchmark"
-harness = false
-
-[[bench]]
-name = "cache_misses"
-harness = false
-
-[[bench]]
-name = "cache_performance"
 harness = false
