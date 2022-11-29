@@ -9,7 +9,9 @@ pub mod error;
 use error::*;
 use serde::{Deserialize, Serialize};
 
+pub mod block;
 mod names;
+
 pub mod properties;
 pub mod utils;
 
@@ -119,7 +121,9 @@ impl<'input, V> Expression<'input, V> {
         match self {
             Self::Value(_) => 1,
             Self::Op { left, right, .. } => 1 + left.leafs_count() + right.leafs_count(),
-            Self::FnCall { arguments, .. } => arguments.iter().map(Self::leafs_count).sum(),
+            Self::FnCall { arguments, .. } => {
+                1 + arguments.iter().map(Self::leafs_count).sum::<usize>()
+            }
         }
     }
 }
