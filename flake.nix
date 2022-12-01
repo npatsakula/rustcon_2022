@@ -4,32 +4,25 @@
     utils.url = "github:numtide/flake-utils";
     rust-overlay.url = "github:oxalica/rust-overlay";
     flake-compat = { url = "github:edolstra/flake-compat"; flake = false; };
+    crane = { url = "github:ipetkov/crane"; inputs.nixpkgs.follows = "nixpkgs"; };
   };
-
-  outputs = { self, nixpkgs, utils, rust-overlay, flake-compat }:
+  outputs = { self, nixpkgs, utils, rust-overlay, crane, flake-compat }:
     utils.lib.eachSystem [ utils.lib.system.x86_64-linux ] (system:
       let
-        name = "evac";
-
         pkgs = (import nixpkgs {
           inherit system;
           overlays = [ rust-overlay.overlays.default ];
           config.allowUnfree = true;
-        }).extend(self: super: rec {
-          rustPatched = self.rust-bin.stable.latest.default;
-          rustfmt = rustPatched;
-          rustc = rustPatched;
-          cargo = rustPatched;
-          rust-analyzer = rustPatched;
-        }) // {
-          stdenv = pkgs.llvmPackages_14.stdenv;
-        };
+        }).extend(self: super: {
+          patched_rust = self.rust-bin.stable.latest.default;
+        });
 
       fonts = pkgs.makeFontsConf {
         fontDirectories = with pkgs; [
           corefonts
         ];
       };
+
       tex = (pkgs.texlive.combine {
         inherit (pkgs.texlive) scheme-medium
           babel-russian pdftex latexmk
@@ -37,18 +30,36 @@
           ;
       });
 
-      in rec {
-        devShell = pkgs.mkShell.override {
-          stdenv = pkgs.llvmPackages_14.stdenv;
-        } rec {
-          buildInputs = with pkgs; [
-            rustc cargo rust-analyzer libffi zlib libxml2 ncurses.dev
-            valgrind gperftools pprof graphviz
-            tex
-            pkg-config glibc
-          ];
-          FONTCONFIG_FILE="${fonts}";
+      mkShell = pkgs.mkShell.override {
+        stdenv = pkgs.llvmPackages_14.stdenv;
+      };
+
+      crane' = (crane.mkLib pkgs).overrideToolchain pkgs.patched_rust;
+      nativeBuildInputs = with pkgs; [ libffi zlib.dev ncurses libxml2.dev ];
+      in {
+        devShells.default = mkShell {
+          buildInputs = with pkgs; [ patched_rust ] ++ nativeBuildInputs;
           LLVM_SYS_140_PREFIX = "${pkgs.llvmPackages_14.llvm.dev}/";
+        };
+
+        devShells.latex = mkShell {
+          buildInputs = [ tex ];
+          FONTCONFIG_FILE="${fonts}";
+        };
+
+        packages = rec {
+          default = crane'.buildPackage {
+            src = pkgs.lib.cleanSource ./.;
+            inherit nativeBuildInputs;
+            LLVM_SYS_140_PREFIX = "${pkgs.llvmPackages_14.llvm.dev}/";
+          };
+
+          container = pkgs.dockerTools.buildLayeredImage {
+            name = default.pname;
+            tag = "${default.version}-${self.sourceInfo.shortRef or "dirty"}";
+            contents = [ default ];
+            created = "now";
+          };
         };
       });
 }
