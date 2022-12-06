@@ -1,6 +1,7 @@
 # evac
 
 - Текст доклада: [REPORT.md](./REPORT.md).
+- Домашнее задание: [HOMEWORK.md](./HOMEWORK.md)
 
 ## Возможности
 
@@ -17,6 +18,19 @@ triple(1, 2 + 2, sin(3 + 3))
     - [x] Базовые тригонометрические функции: `sin`, `cos`, `pi`.
     - [x] Вложенный вызов функций из контекста.
     - [x] JIT.
+
+## Благодарности
+
+* Руководству [Kribrum](https://kribrum.ru/) за выделенное время на создание этого
+  доклада.
+* [Косаревой Вете](https://github.com/veta666) за ревью текста и помощь со слайдами.
+* [Мартынову Василию](https://github.com/VasilyMartynov) за ревью текста.
+* [Максиму Татарченкову](https://github.com/maxwase) за ревью текста.
+
+## Мы нанимаем
+
+* Rust-разработчик: [hh.ru](https://hh.ru/vacancy/46951717).
+* Erlang-разработчик: [hh.ru](https://hh.ru/vacancy/71992600).
 
 ## Окружение для разработки
 
@@ -67,3 +81,14 @@ cargo bench --profile bench --bench benchmark -- --profile-time 30
 nix build '.#container'
 docker load < result
 ```
+
+## Презентация
+
+Мы можем собрать слайды к презентации следующим набором команд:
+
+```bash
+cd slides
+nix develop .#latex -c tectonic -X build
+```
+
+После чего можно забрать готовый PDF из `./slides/build/`.

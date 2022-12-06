@@ -1,0 +1,26 @@
+\mode<presentation>
+
+\setbeamertemplate{background}{
+  \begin{tikzpicture}
+  \ifnum\thepage=1\relax%
+   \node[anchor=south west,inner sep=0] at (0,0) {\includegraphics[width=\the\paperwidth, height=\the\paperheight]{titlebg.jpg}};
+   \fi
+  \ifnum\thepage>1\relax%
+   \node[anchor=south west,inner sep=0] at (0,0) {\includegraphics[width=\the\paperwidth, height=\the\paperheight]{slidebg.png}};
+   \node[anchor=south west] at(0.2cm,0.2cm) {\color{text}\tiny\insertframenumber};
+   \fi
+  \end{tikzpicture}
+}
+
+% Title page
+\defbeamertemplate*{title page}{evac2022}[1][]
+{
+    \begin{tcolorbox}[colback=white]
+      \raggedright\usebeamerfont{title}\inserttitle\par%
+    \end{tcolorbox}
+    \begin{tcolorbox}[colback=white]
+      \usebeamerfont{author}\insertauthor%
+	  \newline
+      \usebeamerfont{normal text}\insertinstitute%
+    \end{tcolorbox}
+}

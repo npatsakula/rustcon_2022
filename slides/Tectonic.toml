@@ -1,0 +1,8 @@
+[doc]
+name = 'new_slides'
+bundle = 'https://data1.fullyjustified.net/tlextras-2022.0r0.tar'
+
+[[output]]
+shell_escape = true
+name = 'rustcon_2022_parse_jit'
+type = 'pdf'
