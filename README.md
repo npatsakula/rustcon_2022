@@ -3,6 +3,9 @@
 - Текст доклада: [REPORT.md](./REPORT.md).
 - Домашнее задание: [HOMEWORK.md](./HOMEWORK.md)
 
+- Слайды: [slides](https://github.com/npatsakula/rustcon_2022/releases/download/v0.1.0/rustcon_2022_parse_jit.pdf);
+- Cлайды с RustCon: [slides offline edition](https://github.com/npatsakula/rustcon_2022/releases/download/v0.1.0/rustcon_2022_parse_jit_oflline_edition.pdf);
+
 ## Возможности
 
 ```rust
